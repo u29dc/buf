@@ -48,6 +48,7 @@ pub struct FileConfig {
 pub struct DefaultChannels {
     pub instagram: Option<String>,
     pub linkedin: Option<String>,
+    pub threads: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -177,6 +178,13 @@ pub fn inspect_runtime(overrides: &PathOverrides, api_base_url: Option<&str>) ->
                 file_config
                     .as_ref()
                     .and_then(|config| config.default_channels.linkedin.clone())
+            }),
+        threads: resolve_env_var(&["BUF_DEFAULT_CHANNEL_THREADS"], &paths.env_file)
+            .map(|item| item.value)
+            .or_else(|| {
+                file_config
+                    .as_ref()
+                    .and_then(|config| config.default_channels.threads.clone())
             }),
     };
 
@@ -395,9 +403,11 @@ fn mask_secret(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{PathOverrides, resolve_paths};
+    use super::{PathOverrides, inspect_runtime, resolve_paths};
 
     #[test]
     fn override_paths_win() {
@@ -410,5 +420,43 @@ mod tests {
         assert_eq!(paths.config_file, Path::new("/tmp/custom/buf.config.toml"));
         assert_eq!(paths.env_file, Path::new("/tmp/custom/.env"));
         assert_eq!(paths.temp_dir, Path::new("/tmp/buf-home/tmp"));
+    }
+
+    #[test]
+    fn threads_default_channel_resolves_from_env() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!("buf-config-test-{unique}"));
+        fs::create_dir_all(&home).expect("create temp home");
+        let env_file = home.join(".env");
+        fs::write(
+            &env_file,
+            [
+                "BUF_API_TOKEN=test-token",
+                "BUF_DEFAULT_CHANNEL_INSTAGRAM=ig-id",
+                "BUF_DEFAULT_CHANNEL_LINKEDIN=li-id",
+                "BUF_DEFAULT_CHANNEL_THREADS=th-id",
+            ]
+            .join("\n"),
+        )
+        .expect("write env file");
+
+        let inspection = inspect_runtime(
+            &PathOverrides {
+                home: Some(home.clone()),
+                config_file: Some(home.join("buf.config.toml")),
+                env_file: Some(env_file),
+            },
+            None,
+        );
+
+        assert_eq!(
+            inspection.settings.default_channels.threads.as_deref(),
+            Some("th-id")
+        );
+
+        fs::remove_dir_all(home).expect("cleanup temp home");
     }
 }

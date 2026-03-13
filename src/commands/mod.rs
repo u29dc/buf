@@ -177,6 +177,7 @@ pub fn resolve_default_channel_id(
     match service {
         ChannelService::Instagram => settings.default_channels.instagram.as_deref(),
         ChannelService::LinkedIn => settings.default_channels.linkedin.as_deref(),
+        ChannelService::Threads => settings.default_channels.threads.as_deref(),
     }
 }
 

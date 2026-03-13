@@ -234,7 +234,7 @@ fn config_validate_tool() -> ToolMetadata {
 fn channels_list_tool() -> ToolMetadata {
     ToolMetadata {
         name: "channels.list",
-        command: "buf channels list [--service instagram|linkedin] [--query <text>] [--limit <n>]",
+        command: "buf channels list [--service instagram|linkedin|threads] [--query <text>] [--limit <n>]",
         category: "channels",
         description: "List channels for the resolved organization with optional service and text filters.",
         parameters: vec![
@@ -242,7 +242,7 @@ fn channels_list_tool() -> ToolMetadata {
                 "--service",
                 "string",
                 false,
-                "Filter by `instagram` or `linkedin`.",
+                "Filter by `instagram`, `linkedin`, or `threads`.",
             ),
             parameter(
                 "--query",
@@ -271,7 +271,7 @@ fn channels_list_tool() -> ToolMetadata {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "service": { "type": "string", "enum": ["instagram", "linkedin"] },
+                "service": { "type": "string", "enum": ["instagram", "linkedin", "threads"] },
                 "query": { "type": "string" },
                 "limit": { "type": "integer", "minimum": 1 }
             },
@@ -286,7 +286,7 @@ fn channels_list_tool() -> ToolMetadata {
 fn channels_resolve_tool() -> ToolMetadata {
     ToolMetadata {
         name: "channels.resolve",
-        command: "buf channels resolve --service instagram|linkedin [--query <text>]",
+        command: "buf channels resolve --service instagram|linkedin|threads [--query <text>]",
         category: "channels",
         description: "Resolve exactly one channel or fail with a deterministic ambiguity error.",
         parameters: vec![
@@ -311,7 +311,7 @@ fn channels_resolve_tool() -> ToolMetadata {
             "type": "object",
             "required": ["service"],
             "properties": {
-                "service": { "type": "string", "enum": ["instagram", "linkedin"] },
+                "service": { "type": "string", "enum": ["instagram", "linkedin", "threads"] },
                 "query": { "type": "string" }
             },
             "additionalProperties": false
@@ -325,7 +325,7 @@ fn channels_resolve_tool() -> ToolMetadata {
 fn posts_list_tool() -> ToolMetadata {
     ToolMetadata {
         name: "posts.list",
-        command: "buf posts list [--channel <id>] [--service instagram|linkedin] [--status draft|scheduled|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]",
+        command: "buf posts list [--channel <id>] [--service instagram|linkedin|threads] [--status draft|scheduled|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]",
         category: "posts",
         description: "List posts for the resolved organization with cursor pagination.",
         parameters: vec![
@@ -377,7 +377,7 @@ fn posts_list_tool() -> ToolMetadata {
             "type": "object",
             "properties": {
                 "channel": { "type": "string" },
-                "service": { "type": "string", "enum": ["instagram", "linkedin"] },
+                "service": { "type": "string", "enum": ["instagram", "linkedin", "threads"] },
                 "status": { "type": "string" },
                 "from": { "type": "string" },
                 "to": { "type": "string" },

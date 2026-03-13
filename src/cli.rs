@@ -187,6 +187,7 @@ pub enum ChannelService {
     Instagram,
     #[value(name = "linkedin", alias = "linked-in")]
     LinkedIn,
+    Threads,
 }
 
 impl ChannelService {
@@ -195,6 +196,7 @@ impl ChannelService {
         match self {
             Self::Instagram => "instagram",
             Self::LinkedIn => "linkedin",
+            Self::Threads => "threads",
         }
     }
 }
@@ -288,7 +290,9 @@ impl InstagramPostType {
 mod tests {
     use clap::Parser;
 
-    use super::{ChannelsCommand, Cli, Command, PostStatus, PostsArgs, PostsCommand};
+    use super::{
+        ChannelService, ChannelsCommand, Cli, Command, PostStatus, PostsArgs, PostsCommand,
+    };
 
     #[test]
     fn linkedin_service_parses_from_documented_value() {
@@ -300,6 +304,22 @@ mod tests {
                     assert_eq!(list.service.expect("service").as_str(), "linkedin");
                 }
                 _ => panic!("expected channels list"),
+            },
+            _ => panic!("expected channels command"),
+        }
+    }
+
+    #[test]
+    fn threads_service_parses_from_documented_value() {
+        let cli = Cli::try_parse_from(["buf", "channels", "resolve", "--service", "threads"])
+            .expect("parse threads service");
+        match cli.command.expect("subcommand") {
+            Command::Channels(args) => match args.command {
+                ChannelsCommand::Resolve(resolve) => {
+                    assert_eq!(resolve.service, ChannelService::Threads);
+                    assert_eq!(resolve.service.as_str(), "threads");
+                }
+                _ => panic!("expected channels resolve"),
             },
             _ => panic!("expected channels command"),
         }
