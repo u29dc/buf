@@ -16,6 +16,7 @@
     - [`src/media/pipeline.rs`](/Users/han/Git/buf/src/media/pipeline.rs) for local media preparation
     - [`src/storage/service.rs`](/Users/han/Git/buf/src/storage/service.rs) for staging boundary
 - Use `buf tools` and `buf health` as the live source of truth for contract and readiness checks. Do not rely on stale notes or shell history.
+- When channel topology changes in Buffer, refresh with `buf channels list` and update the relevant `BUF_DEFAULT_CHANNEL_*` values before assuming old defaults still apply.
 
 ## 2. Repository Structure
 
@@ -76,6 +77,7 @@
     - `buf channels resolve`
     - `buf posts list`
     - `buf posts get`
+- Supported service selectors currently include `instagram`, `linkedin`, and `threads` for channel discovery, default-channel resolution, and post listing filters.
 - Write-path command:
     - `buf posts create`
 - `posts.create` rules:
@@ -84,6 +86,7 @@
     - Local file path: normalize locally, stage to R2, pass hosted URL to Buffer
     - Remote URL: pass through as-is in v1
     - Prefer `--dry-run` first for new flows, new assets, or changed normalization logic
+    - Cross-posting policy is workflow-level, not implicit CLI behavior. If a non-Instagram post should also go to Threads, create that Threads post deliberately instead of assuming `buf` will fan out automatically.
 - Quality commands:
     - `bun run util:check`
     - `bun run build`
@@ -115,6 +118,10 @@
     - Instagram story/reel: fit within `2160 x 3840`
     - LinkedIn image: fit within `2160 x 2700`
     - LinkedIn video: fit within a `2304` long-edge envelope
+- Keep default-channel handling explicit and small:
+    - `.env` may define `BUF_DEFAULT_CHANNEL_INSTAGRAM`, `BUF_DEFAULT_CHANNEL_LINKEDIN`, and `BUF_DEFAULT_CHANNEL_THREADS`
+    - `buf.config.toml` may cache the same values under `[default_channels]`
+    - LinkedIn may resolve to either a company page or a personal profile; do not hardcode assumptions about channel type
 - Keep secrets out of TOML and git:
     - `.env` holds `BUF_API_TOKEN` and `BUF_MEDIA_*`
     - `buf.config.toml` is optional and should stay small
