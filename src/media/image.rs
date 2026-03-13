@@ -46,6 +46,8 @@ pub fn normalize_image(
             &scale,
             "-frames:v",
             "1",
+            "-update",
+            "1",
             "-an",
             "-map_metadata",
             "-1",
