@@ -1,0 +1,14 @@
+api_base_url = "https://api.buffer.com"
+request_timeout_ms = 30000
+
+# Optional cache/override file. Prefer secrets in `.env`.
+default_organization_id = ""
+
+[default_channels]
+instagram = ""
+linkedin = ""
+
+[media]
+endpoint = ""
+bucket = ""
+base_url = ""
