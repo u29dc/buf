@@ -318,7 +318,7 @@ fn channels_resolve_tool() -> ToolMetadata {
         }),
         idempotent: true,
         rate_limit: Some("Buffer API limits apply; cache organization and channel lookups."),
-        example: "buf channels resolve --service linkedin --query u29dc",
+        example: "buf channels resolve --service linkedin --query example-company",
     }
 }
 

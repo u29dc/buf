@@ -7,6 +7,7 @@ default_organization_id = ""
 [default_channels]
 instagram = ""
 linkedin = ""
+threads = ""
 
 [media]
 endpoint = ""

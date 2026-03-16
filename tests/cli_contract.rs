@@ -39,22 +39,37 @@ fn write_sample_png(path: &Path) {
     fs::write(path, png).expect("write sample png");
 }
 
+fn sample_organization() -> Value {
+    serde_json::json!({
+        "id": "org_123",
+        "name": "Example Org",
+        "ownerEmail": "owner@example.com",
+        "channelCount": 1,
+        "limits": {
+            "scheduledPosts": 100,
+            "scheduledStoriesPerChannel": 10,
+            "ideas": 10,
+            "tags": 10
+        }
+    })
+}
+
 fn sample_channel(service: &str) -> Value {
     let (name, channel_type, external_link) = match service {
         "threads" => (
-            "U29DC Threads",
+            "Example Threads",
             "creator",
-            "https://threads.net/@u29dc".to_owned(),
+            "https://example.com/threads/example-profile".to_owned(),
         ),
         "linkedin" => (
-            "U29DC LinkedIn",
+            "Example LinkedIn",
             "company",
-            "https://linkedin.com/company/u29dc".to_owned(),
+            "https://example.com/linkedin/example-company".to_owned(),
         ),
         _ => (
-            "U29DC Instagram",
+            "Example Instagram",
             "business",
-            "https://instagram.com/u29dc".to_owned(),
+            "https://example.com/instagram/example-profile".to_owned(),
         ),
     };
 
@@ -129,6 +144,15 @@ fn tools_catalog_is_json_first() {
     let tools = payload["data"]["tools"].as_array().expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "channels.list"));
     assert!(tools.iter().any(|tool| tool["name"] == "posts.create"));
+
+    let resolve_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "channels.resolve")
+        .expect("channels.resolve tool");
+    assert_eq!(
+        resolve_tool["example"],
+        Value::String("buf channels resolve --service linkedin --query example-company".to_owned())
+    );
 }
 
 #[test]
@@ -174,20 +198,7 @@ async fn channels_list_reads_mocked_buffer_channels() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "data": {
                 "account": {
-                    "organizations": [
-                        {
-                            "id": "org_123",
-                            "name": "Main Org",
-                            "ownerEmail": "han@example.com",
-                            "channelCount": 1,
-                            "limits": {
-                                "scheduledPosts": 100,
-                                "scheduledStoriesPerChannel": 10,
-                                "ideas": 10,
-                                "tags": 10
-                            }
-                        }
-                    ]
+                    "organizations": [sample_organization()]
                 }
             }
         })))
@@ -523,20 +534,7 @@ async fn posts_list_uses_nested_due_at_filter_for_date_bounds() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "data": {
                 "account": {
-                    "organizations": [
-                        {
-                            "id": "org_123",
-                            "name": "Main Org",
-                            "ownerEmail": "han@example.com",
-                            "channelCount": 1,
-                            "limits": {
-                                "scheduledPosts": 100,
-                                "scheduledStoriesPerChannel": 10,
-                                "ideas": 10,
-                                "tags": 10
-                            }
-                        }
-                    ]
+                    "organizations": [sample_organization()]
                 }
             }
         })))
