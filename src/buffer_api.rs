@@ -373,28 +373,12 @@ impl BufferClient {
     }
 
     pub fn list_posts(&self, options: &ListPostsOptions) -> Result<PostListResponse, CommandError> {
-        let mut filter = serde_json::Map::new();
-        if let Some(channel_id) = options.channel_id.as_deref() {
-            filter.insert("channelIds".to_owned(), json!([channel_id]));
-        }
-        if let Some(status) = options.status {
-            filter.insert("status".to_owned(), json!([status.as_str()]));
-            apply_range_filter(
-                &mut filter,
-                status,
-                options.from.as_deref(),
-                options.to.as_deref(),
-            );
-        } else {
-            apply_due_at_filter(&mut filter, options.from.as_deref(), options.to.as_deref());
-        }
-
         let response: PostsQueryResponse = self.graphql(
             POSTS_QUERY,
             json!({
                 "input": {
                     "organizationId": options.organization_id,
-                    "filter": Value::Object(filter),
+                    "filter": Value::Object(build_posts_filter(options)),
                 },
                 "first": options.limit,
                 "after": options.cursor,
@@ -707,23 +691,16 @@ fn payload_message(payload: &Value, fallback: &str) -> String {
         .to_owned()
 }
 
-fn apply_range_filter(
-    filter: &mut serde_json::Map<String, Value>,
-    status: PostStatus,
-    from: Option<&str>,
-    to: Option<&str>,
-) {
-    match status {
-        PostStatus::Sent => {
-            if let Some(value) = from {
-                filter.insert("publishedAtStart".to_owned(), json!(value));
-            }
-            if let Some(value) = to {
-                filter.insert("publishedAtStop".to_owned(), json!(value));
-            }
-        }
-        _ => apply_due_at_filter(filter, from, to),
+fn build_posts_filter(options: &ListPostsOptions) -> serde_json::Map<String, Value> {
+    let mut filter = serde_json::Map::new();
+    if let Some(channel_id) = options.channel_id.as_deref() {
+        filter.insert("channelIds".to_owned(), json!([channel_id]));
     }
+    if let Some(status) = options.status {
+        filter.insert("status".to_owned(), json!([status.as_str()]));
+    }
+    apply_due_at_filter(&mut filter, options.from.as_deref(), options.to.as_deref());
+    filter
 }
 
 fn apply_due_at_filter(
@@ -731,10 +708,69 @@ fn apply_due_at_filter(
     from: Option<&str>,
     to: Option<&str>,
 ) {
+    let mut comparator = serde_json::Map::new();
     if let Some(value) = from {
-        filter.insert("dueAtStart".to_owned(), json!(value));
+        comparator.insert("start".to_owned(), json!(value));
     }
     if let Some(value) = to {
-        filter.insert("dueAtStop".to_owned(), json!(value));
+        comparator.insert("end".to_owned(), json!(value));
+    }
+    if !comparator.is_empty() {
+        filter.insert("dueAt".to_owned(), Value::Object(comparator));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use crate::cli::PostStatus;
+
+    use super::{ListPostsOptions, build_posts_filter};
+
+    #[test]
+    fn posts_filter_uses_nested_due_at_comparator() {
+        let filter = build_posts_filter(&ListPostsOptions {
+            organization_id: "org_123".to_owned(),
+            channel_id: Some("ch_123".to_owned()),
+            status: Some(PostStatus::Scheduled),
+            from: Some("2026-03-09T00:00:00Z".to_owned()),
+            to: Some("2026-03-16T00:00:00Z".to_owned()),
+            limit: 20,
+            cursor: None,
+        });
+
+        assert_eq!(filter.get("channelIds"), Some(&json!(["ch_123"])));
+        assert_eq!(filter.get("status"), Some(&json!(["scheduled"])));
+        assert_eq!(
+            filter.get("dueAt"),
+            Some(&json!({
+                "start": "2026-03-09T00:00:00Z",
+                "end": "2026-03-16T00:00:00Z",
+            }))
+        );
+        assert_eq!(filter.get("dueAtStart"), None);
+        assert_eq!(filter.get("dueAtStop"), None);
+        assert_eq!(filter.get("publishedAtStart"), None);
+        assert_eq!(filter.get("publishedAtStop"), None);
+    }
+
+    #[test]
+    fn posts_filter_omits_due_at_when_no_bounds_are_provided() {
+        let filter = build_posts_filter(&ListPostsOptions {
+            organization_id: "org_123".to_owned(),
+            channel_id: None,
+            status: Some(PostStatus::Sent),
+            from: None,
+            to: None,
+            limit: 20,
+            cursor: None,
+        });
+
+        assert_eq!(
+            filter.get("status"),
+            Some(&Value::Array(vec![json!("sent")]))
+        );
+        assert_eq!(filter.get("dueAt"), None);
     }
 }

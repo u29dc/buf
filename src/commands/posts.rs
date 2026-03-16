@@ -303,6 +303,26 @@ fn build_metadata(
                 Ok(json!({ "linkedin": Value::Object(service_meta) }))
             }
         }
+        "threads" => {
+            if args
+                .post_type
+                .is_some_and(|post_type| post_type != InstagramPostType::Post)
+            {
+                return Err(CommandError::failure(
+                    "VALIDATION_ERROR",
+                    "Threads only supports the default `post` type in this prototype",
+                    "Remove --type or leave it as `post`",
+                ));
+            }
+            if !service_meta.is_empty() || args.link_url.is_some() || args.share_to_feed {
+                return Err(CommandError::failure(
+                    "VALIDATION_ERROR",
+                    "service-specific metadata is not implemented for `threads`",
+                    "Use a plain Threads post or extend Threads metadata support first",
+                ));
+            }
+            Ok(Value::Null)
+        }
         _ => {
             if !service_meta.is_empty() || args.link_url.is_some() || args.share_to_feed {
                 return Err(CommandError::failure(

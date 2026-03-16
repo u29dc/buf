@@ -28,10 +28,11 @@ pub fn resolve_profile(
     match service {
         "instagram" => resolve_instagram_profile(requested_post_type, kind, media_count),
         "linkedin" => resolve_linkedin_profile(requested_post_type, kind, media_count),
+        "threads" => resolve_threads_profile(requested_post_type, kind, media_count),
         _ => Err(CommandError::failure(
             "MEDIA_SERVICE_UNSUPPORTED",
             format!("media preparation is not implemented for `{service}`"),
-            "Use an Instagram or LinkedIn channel for posts with --media",
+            "Use an Instagram, LinkedIn, or Threads channel for posts with --media",
         )),
     }
 }
@@ -210,6 +211,48 @@ fn resolve_linkedin_profile(
     })
 }
 
+fn resolve_threads_profile(
+    requested_post_type: Option<InstagramPostType>,
+    kind: MediaKind,
+    media_count: usize,
+) -> Result<ProfileDecision, CommandError> {
+    if kind == MediaKind::Video && media_count > 1 {
+        return Err(CommandError::failure(
+            "MEDIA_COMBINATION_UNSUPPORTED",
+            "Threads only supports one video per post in this prototype",
+            "Use one video or switch to one or more images",
+        ));
+    }
+    if requested_post_type.is_some_and(|post_type| post_type != InstagramPostType::Post) {
+        return Err(CommandError::failure(
+            "VALIDATION_ERROR",
+            "Threads only supports the default `post` type in this prototype",
+            "Remove --type or leave it as `post`",
+        ));
+    }
+
+    let profile = MediaProfile {
+        name: "threads-feed",
+        max_width: 2160,
+        max_height: 2700,
+        min_ratio: 0.8,
+        max_ratio: 1.91,
+        output_extension: match kind {
+            MediaKind::Image => "jpg",
+            MediaKind::Video => "mp4",
+        },
+        content_type: match kind {
+            MediaKind::Image => "image/jpeg",
+            MediaKind::Video => "video/mp4",
+        },
+    };
+
+    Ok(ProfileDecision {
+        profile,
+        effective_post_type: Some("post".to_owned()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cli::InstagramPostType;
@@ -235,6 +278,26 @@ mod tests {
     fn linkedin_rejects_non_post_type() {
         let error = resolve_profile(
             "linkedin",
+            Some(InstagramPostType::Story),
+            MediaKind::Image,
+            1,
+        )
+        .expect_err("should reject");
+        assert_eq!(error.code(), "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn threads_supports_multiple_images() {
+        let decision =
+            resolve_profile("threads", None, MediaKind::Image, 2).expect("profile decision");
+        assert_eq!(decision.effective_post_type.as_deref(), Some("post"));
+        assert_eq!(decision.profile.name, "threads-feed");
+    }
+
+    #[test]
+    fn threads_rejects_non_post_type() {
+        let error = resolve_profile(
+            "threads",
             Some(InstagramPostType::Story),
             MediaKind::Image,
             1,

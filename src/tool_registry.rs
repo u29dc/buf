@@ -425,7 +425,7 @@ fn posts_get_tool() -> ToolMetadata {
 fn posts_create_tool() -> ToolMetadata {
     ToolMetadata {
         name: "posts.create",
-        command: "buf posts create --channel <channel-id> [--body <text> | --body-file <path> | --stdin] [--target draft|schedule|queue|next|now] [--at <iso>] [--delivery automatic|notification] [--type post|carousel|story|reel] [--media <path-or-url> ...] [--first-comment <text>] [--meta-json <json>] [--dry-run]",
+        command: "buf posts create --channel <channel-id> [--body <text> | --body-file <path> | --stdin] [--target draft|schedule|queue|next|now] [--at <iso>] [--delivery automatic|notification] [--type post|carousel|story|reel] [--media <path-or-url> ...] [--first-comment <text>] [--link-url <url>] [--share-to-feed] [--meta-json <json>] [--dry-run]",
         category: "posts",
         description: "Create a draft, scheduled post, queued post, or immediate post through Buffer with one unified media input surface.",
         parameters: vec![
@@ -480,6 +480,18 @@ fn posts_create_tool() -> ToolMetadata {
                 "Instagram or LinkedIn first comment.",
             ),
             parameter(
+                "--link-url",
+                "string",
+                false,
+                "Instagram link or LinkedIn link attachment URL.",
+            ),
+            parameter(
+                "--share-to-feed",
+                "boolean",
+                false,
+                "Instagram-only flag to share reel media to the main feed.",
+            ),
+            parameter(
                 "--meta-json",
                 "json",
                 false,
@@ -517,6 +529,8 @@ fn posts_create_tool() -> ToolMetadata {
                 "type": { "type": "string", "enum": ["post", "carousel", "story", "reel"] },
                 "media": { "type": "array", "items": { "type": "string" } },
                 "firstComment": { "type": "string" },
+                "linkUrl": { "type": "string" },
+                "shareToFeed": { "type": "boolean" },
                 "metaJson": { "type": "object" },
                 "dryRun": { "type": "boolean" }
             },
