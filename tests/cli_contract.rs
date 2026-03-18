@@ -55,6 +55,10 @@ fn sample_organization() -> Value {
 }
 
 fn sample_channel(service: &str) -> Value {
+    sample_channel_with_id(service, "ch_123")
+}
+
+fn sample_channel_with_id(service: &str, id: &str) -> Value {
     let (name, channel_type, external_link) = match service {
         "threads" => (
             "Example Threads",
@@ -74,7 +78,7 @@ fn sample_channel(service: &str) -> Value {
     };
 
     serde_json::json!({
-        "id": "ch_123",
+        "id": id,
         "name": name,
         "displayName": name,
         "service": service,
@@ -90,18 +94,44 @@ fn sample_channel(service: &str) -> Value {
 }
 
 fn sample_post(service: &str) -> Value {
+    sample_post_with_fields(service, "scheduled", None, None)
+}
+
+fn sample_sent_post(service: &str) -> Value {
+    sample_post_with_fields(
+        service,
+        "sent",
+        Some("2026-03-17T18:03:01.020Z"),
+        Some(sample_post_external_link(service)),
+    )
+}
+
+fn sample_post_external_link(service: &str) -> &'static str {
+    match service {
+        "threads" => "https://www.threads.com/@u29dc/post/DV9AqZllQ9O",
+        "linkedin" => "https://www.linkedin.com/feed/update/urn:li:ugcPost:7439315639837663233",
+        _ => "https://www.instagram.com/p/DV8R2gKkUPh/",
+    }
+}
+
+fn sample_post_with_fields(
+    service: &str,
+    status: &str,
+    sent_at: Option<&str>,
+    external_link: Option<&str>,
+) -> Value {
     serde_json::json!({
         "id": "post_123",
-        "status": "scheduled",
+        "status": status,
         "via": null,
         "schedulingType": "automatic",
         "shareMode": "customScheduled",
         "createdAt": "2026-03-13T10:00:00Z",
         "updatedAt": "2026-03-13T10:00:00Z",
         "dueAt": "2026-03-26T10:28:47Z",
-        "sentAt": null,
+        "sentAt": sent_at,
         "text": "Hello Buffer",
-        "externalLink": null,
+        "externalLink": external_link,
         "channelId": "ch_123",
         "channelService": service,
         "tags": [],
@@ -144,6 +174,27 @@ fn tools_catalog_is_json_first() {
     let tools = payload["data"]["tools"].as_array().expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "channels.list"));
     assert!(tools.iter().any(|tool| tool["name"] == "posts.create"));
+    let posts_list_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "posts.list")
+        .expect("posts.list tool");
+    assert_eq!(
+        posts_list_tool["command"],
+        Value::String(
+            "buf posts list [--channel <id>] [--service instagram|linkedin|threads] [--status draft|needs_approval|scheduled|sending|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]".to_owned()
+        )
+    );
+    assert_eq!(
+        posts_list_tool["example"],
+        Value::String("buf posts list --status sent --service linkedin --limit 10".to_owned())
+    );
+    assert!(
+        posts_list_tool["outputFields"]
+            .as_array()
+            .expect("posts.list output fields")
+            .iter()
+            .any(|field| field == "posts[].publishedUrl")
+    );
 
     let resolve_tool = tools
         .iter()
@@ -152,6 +203,18 @@ fn tools_catalog_is_json_first() {
     assert_eq!(
         resolve_tool["example"],
         Value::String("buf channels resolve --service linkedin --query example-company".to_owned())
+    );
+
+    let posts_get_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "posts.get")
+        .expect("posts.get tool");
+    assert!(
+        posts_get_tool["outputFields"]
+            .as_array()
+            .expect("posts.get output fields")
+            .iter()
+            .any(|field| field == "post.publishedUrl")
     );
 }
 
@@ -453,6 +516,7 @@ async fn posts_create_calls_create_post_and_returns_created_post() {
         payload["data"]["post"]["status"],
         Value::String("scheduled".to_owned())
     );
+    assert_eq!(payload["data"]["post"]["publishedUrl"], Value::Null);
 }
 
 #[tokio::test]
@@ -516,6 +580,135 @@ async fn posts_create_threads_remote_url_calls_create_post() {
     assert_eq!(
         payload["data"]["post"]["channelService"],
         Value::String("threads".to_owned())
+    );
+    assert_eq!(payload["data"]["post"]["publishedUrl"], Value::Null);
+}
+
+#[tokio::test]
+async fn posts_get_returns_published_url_alias_for_sent_post() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query GetPost"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "post": sample_sent_post("linkedin")
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args(["--api-base-url", &server.uri(), "posts", "get", "post_123"])
+        .output()
+        .expect("run posts get");
+
+    assert!(output.status.success(), "posts get should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["data"]["post"]["externalLink"],
+        Value::String(sample_post_external_link("linkedin").to_owned())
+    );
+    assert_eq!(
+        payload["data"]["post"]["publishedUrl"],
+        Value::String(sample_post_external_link("linkedin").to_owned())
+    );
+}
+
+#[tokio::test]
+async fn posts_list_service_filter_resolves_matching_channel_ids_and_returns_published_url() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(
+        home.path(),
+        "BUF_API_TOKEN=test-token\nBUF_API_BASE_URL=http://placeholder.invalid\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query AccountOrganizations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "account": {
+                    "organizations": [sample_organization()]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query OrganizationChannels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channels": [
+                    sample_channel_with_id("instagram", "ig_123"),
+                    sample_channel_with_id("linkedin", "li_123"),
+                    sample_channel_with_id("instagram", "ig_456")
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query ListPosts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "posts": {
+                    "edges": [
+                        {
+                            "cursor": "cursor_123",
+                            "node": sample_sent_post("instagram")
+                        }
+                    ],
+                    "pageInfo": {
+                        "hasNextPage": false,
+                        "endCursor": null
+                    }
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "list",
+            "--service",
+            "instagram",
+            "--status",
+            "sent",
+            "--limit",
+            "10",
+        ])
+        .output()
+        .expect("run posts list");
+
+    assert!(output.status.success(), "posts list should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["data"]["posts"][0]["publishedUrl"],
+        Value::String(sample_post_external_link("instagram").to_owned())
+    );
+
+    let requests = server.received_requests().await.expect("received requests");
+    let list_request = requests
+        .iter()
+        .find(|request| String::from_utf8_lossy(&request.body).contains("query ListPosts"))
+        .expect("list request");
+    let body: Value = serde_json::from_slice(&list_request.body).expect("request body json");
+    assert_eq!(
+        body["variables"]["input"]["filter"]["channelIds"],
+        serde_json::json!(["ig_123", "ig_456"])
     );
 }
 

@@ -4,11 +4,11 @@ use std::io::{self, Read};
 use chrono::DateTime;
 use serde_json::{Map, Value, json};
 
-use crate::buffer_api::ListPostsOptions;
+use crate::buffer_api::{BufferClient, ListPostsOptions, Post};
 use crate::cli::{CreateTarget, InstagramPostType, PostsCreateArgs, PostsGetArgs, PostsListArgs};
 use crate::commands::{
-    CommandOutput, CommandResult, GlobalOptions, build_client, resolve_organization_id,
-    validate_limit,
+    CommandOutput, CommandResult, GlobalOptions, build_client, filter_channels,
+    resolve_organization_id, validate_limit,
 };
 use crate::config::load_runtime;
 use crate::error::CommandError;
@@ -19,38 +19,29 @@ pub fn list(options: &GlobalOptions, args: &PostsListArgs) -> CommandResult {
     let runtime = load_runtime(&options.path_overrides(), options.api_base_url.as_deref())?;
     let client = build_client(&runtime)?;
     let (organization_id, _) = resolve_organization_id(&client, &runtime.settings)?;
+    let channel_ids = resolve_list_channel_ids(&client, &organization_id, args)?;
+
+    if args.service.is_some() && channel_ids.is_empty() {
+        return Ok(empty_list_output(args));
+    }
 
     let mut response = client.list_posts(&ListPostsOptions {
         organization_id,
-        channel_id: args.channel.clone(),
+        channel_ids,
         status: args.status,
         from: args.from.clone(),
         to: args.to.clone(),
         limit: args.limit,
         cursor: args.cursor.clone(),
     })?;
-
-    if let Some(service) = args.service {
-        response
-            .posts
-            .retain(|post| post.channel_service == service.as_str());
-    }
-
-    let count = response.posts.len();
+    let posts = serialize_posts(std::mem::take(&mut response.posts))?;
+    let count = posts.len();
     Ok(CommandOutput::new(
         "posts.list",
         json!({
-            "posts": response.posts,
+            "posts": posts,
             "pageInfo": response.page_info,
-            "query": {
-                "channel": args.channel,
-                "service": args.service.map(|service| service.as_str().to_owned()),
-                "status": args.status.map(|status| status.as_str().to_owned()),
-                "from": args.from,
-                "to": args.to,
-                "limit": args.limit,
-                "cursor": args.cursor,
-            }
+            "query": build_list_query(args),
         }),
     )
     .with_count(count)
@@ -69,6 +60,7 @@ pub fn get(options: &GlobalOptions, args: &PostsGetArgs) -> CommandResult {
             "Verify the Buffer post id and retry",
         )
     })?;
+    let post = serialize_post(post)?;
 
     Ok(CommandOutput::new("posts.get", json!({ "post": post }))
         .with_count(1)
@@ -115,7 +107,7 @@ pub fn create(options: &GlobalOptions, args: &PostsCreateArgs) -> CommandResult 
         .with_text("dry-run request generated"));
     }
 
-    let post = client.create_post(request.clone())?;
+    let post = serialize_post(client.create_post(request.clone())?)?;
     Ok(CommandOutput::new(
         "posts.create",
         json!({
@@ -130,6 +122,85 @@ pub fn create(options: &GlobalOptions, args: &PostsCreateArgs) -> CommandResult 
     .with_total(1)
     .with_has_more(false)
     .with_text("post created"))
+}
+
+fn resolve_list_channel_ids(
+    client: &BufferClient,
+    organization_id: &str,
+    args: &PostsListArgs,
+) -> Result<Vec<String>, CommandError> {
+    if args.service.is_none() {
+        return Ok(args.channel.iter().cloned().collect());
+    }
+
+    // Buffer posts filtering supports channelIds but not service, so resolve the
+    // requested service to channel ids before querying posts.
+    let channels = client.list_channels(organization_id)?;
+    let mut channel_ids = filter_channels(&channels, args.service, None)
+        .into_iter()
+        .map(|channel| channel.id)
+        .collect::<Vec<_>>();
+
+    if let Some(channel_id) = args.channel.as_ref() {
+        channel_ids.retain(|candidate| candidate == channel_id);
+    }
+
+    Ok(channel_ids)
+}
+
+fn empty_list_output(args: &PostsListArgs) -> CommandOutput {
+    CommandOutput::new(
+        "posts.list",
+        json!({
+            "posts": [],
+            "pageInfo": {
+                "hasMore": false,
+                "nextCursor": Value::Null,
+            },
+            "query": build_list_query(args),
+        }),
+    )
+    .with_count(0)
+    .with_total(0)
+    .with_has_more(false)
+    .with_text("0 post(s) matched")
+}
+
+fn build_list_query(args: &PostsListArgs) -> Value {
+    json!({
+        "channel": args.channel,
+        "service": args.service.map(|service| service.as_str().to_owned()),
+        "status": args.status.map(|status| status.as_str().to_owned()),
+        "from": args.from,
+        "to": args.to,
+        "limit": args.limit,
+        "cursor": args.cursor,
+    })
+}
+
+fn serialize_post(post: Post) -> Result<Value, CommandError> {
+    let mut value = serde_json::to_value(post).map_err(|error| {
+        CommandError::failure(
+            "SERIALIZATION_ERROR",
+            format!("failed to serialize post output: {error}"),
+            "Retry the command after reducing output size",
+        )
+    })?;
+    inject_published_url(&mut value);
+    Ok(value)
+}
+
+fn serialize_posts(posts: Vec<Post>) -> Result<Vec<Value>, CommandError> {
+    posts.into_iter().map(serialize_post).collect()
+}
+
+fn inject_published_url(value: &mut Value) {
+    let Value::Object(map) = value else {
+        return;
+    };
+
+    let published_url = map.get("externalLink").cloned().unwrap_or(Value::Null);
+    map.insert("publishedUrl".to_owned(), published_url);
 }
 
 fn resolve_body(args: &PostsCreateArgs) -> Result<String, CommandError> {

@@ -325,18 +325,23 @@ fn channels_resolve_tool() -> ToolMetadata {
 fn posts_list_tool() -> ToolMetadata {
     ToolMetadata {
         name: "posts.list",
-        command: "buf posts list [--channel <id>] [--service instagram|linkedin|threads] [--status draft|scheduled|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]",
+        command: "buf posts list [--channel <id>] [--service instagram|linkedin|threads] [--status draft|needs_approval|scheduled|sending|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]",
         category: "posts",
-        description: "List posts for the resolved organization with cursor pagination.",
+        description: "List posts for the resolved organization with cursor pagination. Returned post objects include publishedUrl as a non-breaking alias for Buffer externalLink.",
         parameters: vec![
             parameter("--channel", "string", false, "Optional Buffer channel id."),
             parameter(
                 "--service",
                 "string",
                 false,
-                "Optional client-side service filter.",
+                "Optional service filter resolved to matching channel ids before querying Buffer.",
             ),
-            parameter("--status", "string", false, "Optional post status filter."),
+            parameter(
+                "--status",
+                "string",
+                false,
+                "Optional post status filter: draft, needs_approval, scheduled, sending, sent, or error.",
+            ),
             parameter(
                 "--from",
                 "string",
@@ -362,7 +367,7 @@ fn posts_list_tool() -> ToolMetadata {
                 "Opaque pagination cursor from a prior response.",
             ),
         ],
-        output_fields: vec!["posts", "pageInfo", "query"],
+        output_fields: vec!["posts", "posts[].publishedUrl", "pageInfo", "query"],
         output_schema: json!({
             "type": "object",
             "required": ["posts", "pageInfo", "query"],
@@ -378,7 +383,10 @@ fn posts_list_tool() -> ToolMetadata {
             "properties": {
                 "channel": { "type": "string" },
                 "service": { "type": "string", "enum": ["instagram", "linkedin", "threads"] },
-                "status": { "type": "string" },
+                "status": {
+                    "type": "string",
+                    "enum": ["draft", "needs_approval", "scheduled", "sending", "sent", "error"]
+                },
                 "from": { "type": "string" },
                 "to": { "type": "string" },
                 "limit": { "type": "integer", "minimum": 1 },
@@ -388,7 +396,7 @@ fn posts_list_tool() -> ToolMetadata {
         }),
         idempotent: true,
         rate_limit: Some("Buffer API limits apply; avoid aggressive polling."),
-        example: "buf posts list --status scheduled --limit 10",
+        example: "buf posts list --status sent --service linkedin --limit 10",
     }
 }
 
@@ -397,9 +405,9 @@ fn posts_get_tool() -> ToolMetadata {
         name: "posts.get",
         command: "buf posts get <post-id>",
         category: "posts",
-        description: "Fetch one Buffer post by id.",
+        description: "Fetch one Buffer post by id. Returned post includes publishedUrl as a non-breaking alias for Buffer externalLink.",
         parameters: vec![parameter("post-id", "string", true, "Buffer post id.")],
-        output_fields: vec!["post"],
+        output_fields: vec!["post", "post.publishedUrl"],
         output_schema: json!({
             "type": "object",
             "required": ["post"],
@@ -427,7 +435,7 @@ fn posts_create_tool() -> ToolMetadata {
         name: "posts.create",
         command: "buf posts create --channel <channel-id> [--body <text> | --body-file <path> | --stdin] [--target draft|schedule|queue|next|now] [--at <iso>] [--delivery automatic|notification] [--type post|carousel|story|reel] [--media <path-or-url> ...] [--first-comment <text>] [--link-url <url>] [--share-to-feed] [--meta-json <json>] [--dry-run]",
         category: "posts",
-        description: "Create a draft, scheduled post, queued post, or immediate post through Buffer with one unified media input surface.",
+        description: "Create a draft, scheduled post, queued post, or immediate post through Buffer with one unified media input surface. Returned post includes publishedUrl as a non-breaking alias for Buffer externalLink when available.",
         parameters: vec![
             parameter("--channel", "string", true, "Buffer channel id."),
             parameter("--body", "string", false, "Inline post body text."),
@@ -504,7 +512,14 @@ fn posts_create_tool() -> ToolMetadata {
                 "Return the normalized Buffer input without creating a post.",
             ),
         ],
-        output_fields: vec!["dryRun", "channel", "request", "stagedMedia", "post"],
+        output_fields: vec![
+            "dryRun",
+            "channel",
+            "request",
+            "stagedMedia",
+            "post",
+            "post.publishedUrl",
+        ],
         output_schema: json!({
             "type": "object",
             "properties": {

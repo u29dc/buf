@@ -315,7 +315,7 @@ pub struct PostListResponse {
 #[derive(Debug, Clone, Default)]
 pub struct ListPostsOptions {
     pub organization_id: String,
-    pub channel_id: Option<String>,
+    pub channel_ids: Vec<String>,
     pub status: Option<PostStatus>,
     pub from: Option<String>,
     pub to: Option<String>,
@@ -693,8 +693,8 @@ fn payload_message(payload: &Value, fallback: &str) -> String {
 
 fn build_posts_filter(options: &ListPostsOptions) -> serde_json::Map<String, Value> {
     let mut filter = serde_json::Map::new();
-    if let Some(channel_id) = options.channel_id.as_deref() {
-        filter.insert("channelIds".to_owned(), json!([channel_id]));
+    if !options.channel_ids.is_empty() {
+        filter.insert("channelIds".to_owned(), json!(options.channel_ids));
     }
     if let Some(status) = options.status {
         filter.insert("status".to_owned(), json!([status.as_str()]));
@@ -732,7 +732,7 @@ mod tests {
     fn posts_filter_uses_nested_due_at_comparator() {
         let filter = build_posts_filter(&ListPostsOptions {
             organization_id: "org_123".to_owned(),
-            channel_id: Some("ch_123".to_owned()),
+            channel_ids: vec!["ch_123".to_owned()],
             status: Some(PostStatus::Scheduled),
             from: Some("2026-03-09T00:00:00Z".to_owned()),
             to: Some("2026-03-16T00:00:00Z".to_owned()),
@@ -759,7 +759,7 @@ mod tests {
     fn posts_filter_omits_due_at_when_no_bounds_are_provided() {
         let filter = build_posts_filter(&ListPostsOptions {
             organization_id: "org_123".to_owned(),
-            channel_id: None,
+            channel_ids: vec![],
             status: Some(PostStatus::Sent),
             from: None,
             to: None,

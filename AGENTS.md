@@ -78,6 +78,9 @@
     - `buf posts list`
     - `buf posts get`
 - Supported service selectors currently include `instagram`, `linkedin`, and `threads` for channel discovery, default-channel resolution, and post listing filters.
+- For automation, treat `buf posts get <post-id>` as the canonical lookup for publication state and the live published permalink.
+- Post outputs expose both Buffer `externalLink` and normalized `publishedUrl`. Use `publishedUrl` for app-level published post URLs.
+- `buf posts list --service <service>` resolves that service to matching channel ids before querying Buffer. Prefer `--channel <id>` when the workflow already knows the exact channel.
 - Write-path command:
     - `buf posts create`
 - `posts.create` rules:
@@ -122,6 +125,11 @@
     - `.env` may define `BUF_DEFAULT_CHANNEL_INSTAGRAM`, `BUF_DEFAULT_CHANNEL_LINKEDIN`, and `BUF_DEFAULT_CHANNEL_THREADS`
     - `buf.config.toml` may cache the same values under `[default_channels]`
     - LinkedIn may resolve to either a company page or a personal profile; do not hardcode assumptions about channel type
+- Keep published URL handling explicit:
+    - published post URLs come from post lookup, not channel lookup
+    - scheduled or draft posts may return `publishedUrl = null`
+    - sent posts should surface `publishedUrl`, which aliases Buffer `externalLink`
+    - store Buffer `post.id` from create flows and resolve the same id later instead of inferring publication from list scans alone
 - Keep secrets out of TOML and git:
     - `.env` holds `BUF_API_TOKEN` and `BUF_MEDIA_*`
     - `buf.config.toml` is optional and should stay small
