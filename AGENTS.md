@@ -1,162 +1,105 @@
+> `buf` is a Rust CLI for agents that discovers Buffer organizations and channels, inspects posts, normalizes local media with `ffmpeg` and `ffprobe`, stages it to Cloudflare R2, and creates Buffer posts through the public GraphQL API.
+
 ## 1. Documentation
 
-- Start with official product docs before changing behavior:
-    - Buffer: `https://developers.buffer.com/guides/getting-started.html`
-    - Buffer GraphQL reference: `https://developers.buffer.com/reference.html`
-    - Buffer API standards: `https://developers.buffer.com/guides/api-standards.html`
-    - Buffer API limits: `https://developers.buffer.com/guides/api-limits.html`
-    - Cloudflare R2 public buckets: `https://developers.cloudflare.com/r2/data-access/public-buckets/`
-    - Cloudflare R2 S3 compatibility: `https://developers.cloudflare.com/r2/api/s3/api/`
-- Treat official docs as the contract for Buffer behavior. Use live account inspection only to validate runtime behavior, not to invent undocumented API guarantees.
-- Treat local media upload as unsupported by Buffer itself. `buf` solves local files by normalizing them locally, staging them to R2, and then passing Buffer hosted URLs.
-- Read code before changing surface area:
-    - [`src/cli.rs`](/Users/han/Git/buf/src/cli.rs) for command grammar
-    - [`src/tool_registry.rs`](/Users/han/Git/buf/src/tool_registry.rs) for discovery metadata
-    - [`src/commands/posts.rs`](/Users/han/Git/buf/src/commands/posts.rs) for write-path orchestration
-    - [`src/media/pipeline.rs`](/Users/han/Git/buf/src/media/pipeline.rs) for local media preparation
-    - [`src/storage/service.rs`](/Users/han/Git/buf/src/storage/service.rs) for staging boundary
-- Use `buf tools` and `buf health` as the live source of truth for contract and readiness checks. Do not rely on stale notes or shell history.
-- When channel topology changes in Buffer, refresh with `buf channels list` and update the relevant `BUF_DEFAULT_CHANNEL_*` values before assuming old defaults still apply.
+- Primary references: [Buffer getting started](https://developers.buffer.com/guides/getting-started.html), [Buffer GraphQL reference](https://developers.buffer.com/reference.html), [Buffer API standards](https://developers.buffer.com/guides/api-standards.html), [Buffer API limits](https://developers.buffer.com/guides/api-limits.html), [Cloudflare R2 public buckets](https://developers.cloudflare.com/r2/data-access/public-buckets/), [Cloudflare R2 S3 compatibility](https://developers.cloudflare.com/r2/api/s3/api/)
+- Local source-of-truth files: [`src/cli.rs`](src/cli.rs), [`src/tool_registry.rs`](src/tool_registry.rs), [`src/commands/posts.rs`](src/commands/posts.rs), [`src/media/pipeline.rs`](src/media/pipeline.rs), [`src/storage/service.rs`](src/storage/service.rs), [`tests/cli_contract.rs`](tests/cli_contract.rs)
+- Use `buf tools` for the public command contract and `buf health` for readiness. They are more reliable than old notes or shell history.
+- Treat [`.tmp/docs/research.md`](.tmp/docs/research.md) and related files under [`.tmp/docs/`](.tmp/docs/) as exploratory only. They predate the current unified `--media` surface and some Threads behavior.
 
 ## 2. Repository Structure
 
 ```text
 .
-├── AGENTS.md
-├── CLAUDE.md -> AGENTS.md
-├── README.md -> AGENTS.md
 ├── src/
-│   ├── commands/
-│   ├── media/
-│   ├── storage/
-│   ├── buffer_api.rs
-│   ├── cli.rs
-│   ├── config.rs
-│   ├── envelope.rs
-│   ├── error.rs
-│   ├── main.rs
-│   └── tool_registry.rs
+│   ├── commands/             thin CLI adapters
+│   ├── media/                media parsing, profiling, and normalization
+│   ├── storage/              staging boundary and Cloudflare R2 provider
+│   ├── buffer_api.rs         Buffer GraphQL queries and mutation mapping
+│   ├── cli.rs                clap grammar and enums
+│   ├── config.rs             runtime path and settings resolution
+│   ├── envelope.rs           JSON/text output contract
+│   └── tool_registry.rs      `buf tools` metadata source
 ├── tests/
-│   └── cli_contract.rs
-├── Cargo.toml
-├── buf.config.template.toml
-└── package.json
+│   └── cli_contract.rs       JSON-first CLI and request-shape contract tests
+├── .tmp/docs/                non-authoritative research notes
+├── AGENTS.md                 canonical repo-level agent instructions
+├── CLAUDE.md -> AGENTS.md
+└── README.md -> AGENTS.md
 ```
 
-- Keep `AGENTS.md` as the canonical project policy file. `CLAUDE.md` and `README.md` are compatibility symlinks and should not diverge.
-- Keep command entrypoints thin under `src/commands/`.
-- Keep platform-independent media logic under `src/media/`.
-- Keep staging/provider logic under `src/storage/`.
-- Keep Buffer GraphQL transport and schema mapping in [`src/buffer_api.rs`](/Users/han/Git/buf/src/buffer_api.rs).
-- Keep contract tests in [`tests/cli_contract.rs`](/Users/han/Git/buf/tests/cli_contract.rs). Add unit tests close to modules when behavior is local and deterministic.
+- Keep [`src/commands/`](src/commands/) thin. Buffer transport belongs in [`src/buffer_api.rs`](src/buffer_api.rs), media behavior in [`src/media/`](src/media/), and staging in [`src/storage/`](src/storage/).
+- Treat [`tests/cli_contract.rs`](tests/cli_contract.rs) as the public contract suite. Update it when flags, envelope shape, tool metadata, request normalization, or published URL behavior changes.
+- This repository is intentionally agent-first. Keep [`AGENTS.md`](AGENTS.md) canonical and preserve the symlinks from [`CLAUDE.md`](CLAUDE.md) and [`README.md`](README.md).
 
 ## 3. Stack
 
 | Layer | Choice | Notes |
 | --- | --- | --- |
-| CLI | Rust + Clap | JSON-first, non-interactive command surface |
-| Envelope | `serde` + `serde_json` | Stable `ok/data/error/meta` contract |
-| Buffer transport | GraphQL over `reqwest` blocking client | Simple runtime, explicit query/mutation mapping |
-| Config | `.env` + `buf.config.toml` | Secrets in `.env`; small cached/default values in TOML |
-| Media preparation | `ffprobe` + `ffmpeg` | Probe, normalize, and transcode local assets before staging |
-| Storage abstraction | Internal `storage` service | Commands never talk to R2 directly |
-| Storage provider | Cloudflare R2 via AWS S3 SDK | Public read URL plus authenticated S3-compatible upload |
-| Quality gate | Bun wrapper around Cargo | Matches sibling Rust CLI projects and one-command verification |
+| Runtime | Rust 2024 | single binary crate with `unsafe_code = "forbid"` |
+| CLI | `clap` | noun-first subcommands, JSON-first output, `--text` override |
+| Buffer transport | GraphQL over blocking `reqwest` | documented queries plus `createPost` mutation only |
+| Media pipeline | `ffprobe` + `ffmpeg` | local probe, profile fit, normalization to JPEG or H.264/AAC MP4 |
+| Storage | Cloudflare R2 via AWS S3 SDK | public-read URL plus authenticated S3-compatible upload |
+| Async bridge | local `tokio` runtime inside storage provider | keeps the main CLI synchronous |
+| JS tooling | Bun + Husky + commitlint + lint-staged | wrappers, hooks, and one-command quality gate |
+| Tests | `assert_cmd`, `wiremock`, `tempfile` | contract-heavy CLI coverage with mocked Buffer responses |
 
 ## 4. Commands
 
-- Use the installed `buf` binary for realistic validation. Use `cargo run --` while developing.
-- Core discovery and readiness commands:
-    - `buf tools`
-    - `buf tools posts.create`
-    - `buf health`
-    - `buf config show`
-    - `buf config validate`
-- Read-only Buffer commands:
-    - `buf channels list`
-    - `buf channels resolve`
-    - `buf posts list`
-    - `buf posts get`
-- Supported service selectors currently include `instagram`, `linkedin`, and `threads` for channel discovery, default-channel resolution, and post listing filters.
-- For automation, treat `buf posts get <post-id>` as the canonical lookup for publication state and the live published permalink.
-- Post outputs expose both Buffer `externalLink` and normalized `publishedUrl`. Use `publishedUrl` for app-level published post URLs.
-- `buf posts list --service <service>` resolves that service to matching channel ids before querying Buffer. Prefer `--channel <id>` when the workflow already knows the exact channel.
-- Write-path command:
-    - `buf posts create`
-- `posts.create` rules:
-    - Use exactly one body source: `--body`, `--body-file`, or `--stdin`
-    - Use one media surface only: repeat `--media <path-or-url>` as needed
-    - Local file path: normalize locally, stage to R2, pass hosted URL to Buffer
-    - Remote URL: pass through as-is in v1
-    - Prefer `--dry-run` first for new flows, new assets, or changed normalization logic
-    - Cross-posting policy is workflow-level, not implicit CLI behavior. If a non-Instagram post should also go to Threads, create that Threads post deliberately instead of assuming `buf` will fan out automatically.
-- Quality commands:
-    - `bun run util:check`
-    - `bun run build`
+- `bun install` installs JS tooling and Husky hooks.
+- Use `cargo run -- ...` while iterating on code. Use the installed or built `buf` binary when you need real `BUF_HOME` runtime behavior.
+- `./target/debug/buf tools` and `./target/debug/buf tools posts.create` expose the generated command contract from [`src/tool_registry.rs`](src/tool_registry.rs).
+- `./target/debug/buf health`, `./target/debug/buf config show`, and `./target/debug/buf config validate` inspect runtime state without creating Buffer posts.
+- `./target/debug/buf channels list --service instagram --limit 10` and `./target/debug/buf channels resolve --service threads` are the primary discovery commands for org-scoped channel work.
+- `./target/debug/buf posts list --service instagram --status sent --limit 10` and `./target/debug/buf posts get <post-id>` are the canonical read paths for publication state and `publishedUrl`.
+- `./target/debug/buf posts create --channel <id> --body-file ./post.md --media ./asset.jpg --target draft --dry-run` is the safest write-path smoke test.
+- `bun run util:check` is the required quality gate. `bun run build` also copies the release binary into `${BUF_HOME:-${TOOLS_HOME:-$HOME/.tools}/buf}/buf`.
 
 ## 5. Architecture
 
-- Keep command modules thin. Business logic belongs in `buffer_api`, `media`, and `storage`.
-- Preserve the CLI contract:
-    - JSON is default stdout mode
-    - one JSON line only in JSON mode
-    - stable envelope keys: `ok`, `data` or `error`, `meta`
-    - exit codes: `0` success, `1` failure, `2` blocked
-- Keep one public media entry point only. Do not add parallel flags like `--image-url`, `--image-file`, `--video-url`, or provider-specific upload arguments.
-- Keep storage provider details internal. Public commands should not expose R2-specific vocabulary unless a real operator workflow requires it.
-- Keep provider substitution possible:
-    - `storage::service` is the entry point
-    - provider-specific code stays under `src/storage/providers/`
-    - commands and Buffer transport should operate on normalized hosted assets only
-- Keep local-media behavior deterministic:
-    - images normalize to JPEG
-    - videos normalize to H.264/AAC MP4
-    - preserve aspect ratio
-    - no crop or pad in v1
-    - reject unsupported aspect ratios explicitly
-    - preserve media order
-    - reject mixed image/video sets in one post in v1
-- Keep profiles platform-aware and conservative:
-    - Instagram feed/carousel: fit within `2160 x 2700`
-    - Instagram story/reel: fit within `2160 x 3840`
-    - LinkedIn image: fit within `2160 x 2700`
-    - LinkedIn video: fit within a `2304` long-edge envelope
-- Keep default-channel handling explicit and small:
-    - `.env` may define `BUF_DEFAULT_CHANNEL_INSTAGRAM`, `BUF_DEFAULT_CHANNEL_LINKEDIN`, and `BUF_DEFAULT_CHANNEL_THREADS`
-    - `buf.config.toml` may cache the same values under `[default_channels]`
-    - LinkedIn may resolve to either a company page or a personal profile; do not hardcode assumptions about channel type
-- Keep published URL handling explicit:
-    - published post URLs come from post lookup, not channel lookup
-    - scheduled or draft posts may return `publishedUrl = null`
-    - sent posts should surface `publishedUrl`, which aliases Buffer `externalLink`
-    - store Buffer `post.id` from create flows and resolve the same id later instead of inferring publication from list scans alone
-- Keep secrets out of TOML and git:
-    - `.env` holds `BUF_API_TOKEN` and `BUF_MEDIA_*`
-    - `buf.config.toml` is optional and should stay small
-    - use discovered defaults for organization and channels instead of making the user fill a large config matrix
-- Keep `BUF_*` as the only env namespace. Do not reintroduce `BUFF_*` or generic `BUFFER_*` aliases.
-- Do not assume undocumented Buffer mutations exist. `createPost` is the only public write path currently implemented.
-- Do not post to live Buffer accounts for routine verification unless explicitly asked. Prefer `--dry-run`, read-only commands, and isolated storage smoke tests.
+- [`src/main.rs`](src/main.rs) parses the CLI, defaults stdout to JSON, dispatches commands, and maps success or failure to exit codes `0`, `1`, and `2`.
+- [`src/envelope.rs`](src/envelope.rs) defines the public envelope. JSON mode must emit exactly one stdout line with `{ ok, data | error, meta }`; `--text` is a human-readable escape hatch.
+- [`src/tool_registry.rs`](src/tool_registry.rs) is the single source for `buf tools`. Keep command strings, examples, input schemas, output fields, and flags synchronized with [`src/cli.rs`](src/cli.rs) and [`tests/cli_contract.rs`](tests/cli_contract.rs).
+- [`src/buffer_api.rs`](src/buffer_api.rs) owns documented GraphQL queries and the only implemented write mutation, `createPost`. Do not invent undocumented Buffer mutations or local-upload API behavior.
+- [`src/commands/posts.rs`](src/commands/posts.rs) resolves exactly one body source, injects `publishedUrl` from Buffer `externalLink`, and resolves `--service` post filters to channel ids because Buffer post filtering is channel-based, not service-based.
+- [`src/media/`](src/media/) keeps one public media surface: repeatable `--media`. Local paths are probed, profile-checked, normalized, and staged; remote URLs pass through unchanged after scheme and extension checks.
+- [`src/media/profile.rs`](src/media/profile.rs) encodes service rules: Instagram auto-promotes multiple images to `carousel`, story and reel stay single-asset, LinkedIn allows one asset and default `post` only, Threads allows multiple images or one video but no service-specific metadata yet.
+- [`src/storage/service.rs`](src/storage/service.rs) is the only staging boundary. Commands and Buffer requests should operate on hosted asset URLs, not provider-specific upload details.
 
-## 6. Quality
+## 6. Runtime and State
 
-- Update [`src/tool_registry.rs`](/Users/han/Git/buf/src/tool_registry.rs) whenever the command surface changes. `tools` output is part of the contract.
-- Add or update tests whenever behavior changes in:
-    - config resolution
-    - health readiness
-    - command parsing
-    - post request normalization
-    - media planning
-    - storage staging
-    - error envelopes
-- Keep contract tests JSON-first. Assert on stdout envelope shape, not just text output.
-- Prefer unit tests for deterministic helpers and ignored live tests for external systems.
-- Live R2 tests must remain safe:
-    - use temporary objects only
-    - rely on the `tmp/buf/` lifecycle cleanup rule
-    - never require a Buffer post mutation to validate storage
-- Run `bun run util:check` before completion. If install path or release behavior changed, also run `bun run build`.
-- Validate at least one realistic dry-run flow when changing the write path:
-    - local image -> normalize -> stage -> Buffer request
-    - remote URL -> pass-through -> Buffer request
-- Keep errors explicit and actionable. Every failure path should map to a stable error code with a concrete hint.
+- Path resolution: `--home`, `--config-file`, and `--env-file` override defaults; otherwise `BUF_HOME` wins, then `TOOLS_HOME/buf`, then `~/.tools/buf`. Runtime files live at `buf.config.toml`, `.env`, and `tmp/` under that home.
+- Settings precedence: CLI path and base-URL overrides first; for resolved settings the order is process env -> `.env` -> `buf.config.toml` -> built-in defaults.
+- Keep `BUF_*` as the only supported env namespace: `BUF_API_TOKEN`, `BUF_API_BASE_URL`, `BUF_REQUEST_TIMEOUT_MS`, `BUF_ORGANIZATION_ID`, `BUF_DEFAULT_CHANNEL_INSTAGRAM`, `BUF_DEFAULT_CHANNEL_LINKEDIN`, `BUF_DEFAULT_CHANNEL_THREADS`, and `BUF_MEDIA_*`.
+- [`buf.config.template.toml`](buf.config.template.toml) shows the intended small config surface. Cache `defaultOrganizationId`, `[default_channels]`, and `[media]` there; keep secrets in `.env`.
+- `media.key_prefix` only comes from TOML and defaults to `tmp/buf`. Uploaded R2 objects use UTC date prefixes plus a sanitized source stem.
+- Commands that need an organization auto-discover it. If Buffer returns multiple orgs and no explicit default is configured, the CLI blocks with `ORG_AMBIGUOUS`.
+- `config show` and `config validate` expose masked secret provenance (`process` vs `envFile`) without calling Buffer. `health` also creates or probes the home and temp dirs, checks `ffmpeg` and `ffprobe`, validates R2 readiness, and calls Buffer org discovery when a token is present.
+- Readiness commands report structured status in `data` even on non-zero exits. `health` can return `ok: true` with `data.status = "blocked"` and exit `2`; `config.validate` can return `ok: true` with `valid: false` and exit `1` for parse errors.
+- Local-media dry-runs still require `ffprobe` and complete `BUF_MEDIA_*` settings because the CLI probes the file and plans an R2 key even when it skips normalization and upload.
+- Non-dry-run local media writes create a temporary workdir under `BUF_HOME/tmp`, normalize files there, then upload to a public R2 URL. Remote media does not get dimension probing; it is accepted or rejected locally based on URL scheme and filename extension only.
+
+## 7. Conventions
+
+- Preserve JSON-first stdout. `--text` changes presentation only; post content must stay on `--body`, `--body-file`, or `--stdin`.
+- Keep the public media surface unified as `--media`. Do not reintroduce split flags like `--image-url`, `--video-file`, or provider-specific upload arguments.
+- Preserve `publishedUrl` on post outputs as a non-breaking alias for Buffer `externalLink`.
+- Keep tool names noun-first and keep [`src/cli.rs`](src/cli.rs), [`src/tool_registry.rs`](src/tool_registry.rs), and [`tests/cli_contract.rs`](tests/cli_contract.rs) aligned whenever the surface changes.
+
+## 8. Constraints
+
+- Do not post to live Buffer accounts for routine verification. Prefer `--dry-run`, read-only commands, and mocked tests unless the user explicitly requests a live write.
+- Do not commit operator data from `~/.tools/buf`, `.env`, `buf.config.toml`, `.tmp/`, staged asset URLs, or other runtime state.
+- Treat [`src/envelope.rs`](src/envelope.rs), [`src/tool_registry.rs`](src/tool_registry.rs), and [`tests/cli_contract.rs`](tests/cli_contract.rs) as high-risk contract files. Small drift there breaks agents quickly.
+- Treat remote `--media` URLs without a usable filename extension as unsupported. The current detector classifies remote media from the URL path, not from HTTP headers.
+- Do not hand-edit local or generated artifacts in `target/`, `.tmp/`, or `.husky/_/`. Regenerate or ignore them as appropriate.
+- The ignored smoke test in [`src/storage/service.rs`](src/storage/service.rs) talks to live R2. Keep it disposable, use temporary objects only, and rely on the `tmp/buf/` lifecycle cleanup strategy.
+
+## 9. Validation
+
+- Required gate: `bun run util:check`
+- When changing CLI grammar, envelopes, tool metadata, or default resolution, run `cargo test --test cli_contract` plus the relevant unit tests in `src/*`.
+- When changing the write path or media pipeline, smoke `posts create --dry-run` with one local asset and one public remote URL and verify request assets, metadata, and staged or pass-through URLs.
+- When changing config or runtime-path behavior, run `buf config show`, `buf config validate`, and `buf health` against the intended `BUF_HOME`.
+- If you change command names, flags, examples, or output fields, update [`src/tool_registry.rs`](src/tool_registry.rs) and re-check `buf tools`.
