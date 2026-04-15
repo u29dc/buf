@@ -148,6 +148,18 @@ fragment PostFields on Post {
 }
 "#;
 
+const DAILY_POSTING_LIMITS_QUERY: &str = r#"
+query DailyPostingLimits($input: DailyPostingLimitsInput!) {
+  dailyPostingLimits(input: $input) {
+    channelId
+    sent
+    scheduled
+    limit
+    isAtLimit
+  }
+}
+"#;
+
 const CREATE_POST_MUTATION: &str = r#"
 mutation CreatePost($input: CreatePostInput!) {
   createPost(input: $input) {
@@ -157,22 +169,7 @@ mutation CreatePost($input: CreatePostInput!) {
         ...PostFields
       }
     }
-    ... on NotFoundError {
-      message
-    }
-    ... on UnauthorizedError {
-      message
-    }
-    ... on UnexpectedError {
-      message
-    }
-    ... on RestProxyError {
-      message
-    }
-    ... on LimitReachedError {
-      message
-    }
-    ... on InvalidInputError {
+    ... on MutationError {
       message
     }
   }
@@ -208,11 +205,52 @@ fragment PostFields on Post {
 }
 "#;
 
+const DELETE_POST_MUTATION: &str = r#"
+mutation DeletePost($input: DeletePostInput!) {
+  deletePost(input: $input) {
+    __typename
+    ... on DeletePostSuccess {
+      id
+    }
+    ... on MutationError {
+      message
+    }
+  }
+}
+"#;
+
 #[derive(Debug)]
 pub struct BufferClient {
     http: Client,
     base_url: String,
     token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BufferWarning {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiResponse<T> {
+    pub data: T,
+    pub warnings: Vec<BufferWarning>,
+}
+
+impl<T> ApiResponse<T> {
+    fn new(data: T, warnings: Vec<BufferWarning>) -> Self {
+        Self { data, warnings }
+    }
+
+    fn map<U>(self, transform: impl FnOnce(T) -> U) -> ApiResponse<U> {
+        ApiResponse {
+            data: transform(self.data),
+            warnings: self.warnings,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,6 +350,16 @@ pub struct PostListResponse {
     pub page_info: PageInfo,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyPostingLimitStatus {
+    pub channel_id: String,
+    pub sent: u64,
+    pub scheduled: u64,
+    pub limit: Option<u64>,
+    pub is_at_limit: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ListPostsOptions {
     pub organization_id: String,
@@ -343,13 +391,16 @@ impl BufferClient {
         })
     }
 
-    pub fn list_organizations(&self) -> Result<Vec<Organization>, CommandError> {
-        let response: AccountQueryResponse = self.graphql(ACCOUNT_QUERY, json!({}))?;
-        Ok(response.account.organizations)
+    pub fn list_organizations(&self) -> Result<ApiResponse<Vec<Organization>>, CommandError> {
+        let response: ApiResponse<AccountQueryResponse> = self.graphql(ACCOUNT_QUERY, json!({}))?;
+        Ok(response.map(|payload| payload.account.organizations))
     }
 
-    pub fn list_channels(&self, organization_id: &str) -> Result<Vec<Channel>, CommandError> {
-        let response: ChannelsQueryResponse = self.graphql(
+    pub fn list_channels(
+        &self,
+        organization_id: &str,
+    ) -> Result<ApiResponse<Vec<Channel>>, CommandError> {
+        let response: ApiResponse<ChannelsQueryResponse> = self.graphql(
             CHANNELS_QUERY,
             json!({
                 "input": {
@@ -357,11 +408,14 @@ impl BufferClient {
                 }
             }),
         )?;
-        Ok(response.channels)
+        Ok(response.map(|payload| payload.channels))
     }
 
-    pub fn get_channel(&self, channel_id: &str) -> Result<Option<Channel>, CommandError> {
-        let response: ChannelQueryResponse = self.graphql(
+    pub fn get_channel(
+        &self,
+        channel_id: &str,
+    ) -> Result<ApiResponse<Option<Channel>>, CommandError> {
+        let response: ApiResponse<ChannelQueryResponse> = self.graphql(
             CHANNEL_QUERY,
             json!({
                 "input": {
@@ -369,11 +423,14 @@ impl BufferClient {
                 }
             }),
         )?;
-        Ok(response.channel)
+        Ok(response.map(|payload| payload.channel))
     }
 
-    pub fn list_posts(&self, options: &ListPostsOptions) -> Result<PostListResponse, CommandError> {
-        let response: PostsQueryResponse = self.graphql(
+    pub fn list_posts(
+        &self,
+        options: &ListPostsOptions,
+    ) -> Result<ApiResponse<PostListResponse>, CommandError> {
+        let response: ApiResponse<PostsQueryResponse> = self.graphql(
             POSTS_QUERY,
             json!({
                 "input": {
@@ -385,24 +442,26 @@ impl BufferClient {
             }),
         )?;
 
-        let posts = response
-            .posts
-            .edges
-            .into_iter()
-            .map(|edge| edge.node)
-            .collect::<Vec<_>>();
+        Ok(response.map(|payload| {
+            let posts = payload
+                .posts
+                .edges
+                .into_iter()
+                .map(|edge| edge.node)
+                .collect::<Vec<_>>();
 
-        Ok(PostListResponse {
-            posts,
-            page_info: PageInfo {
-                has_more: response.posts.page_info.has_next_page,
-                next_cursor: response.posts.page_info.end_cursor,
-            },
-        })
+            PostListResponse {
+                posts,
+                page_info: PageInfo {
+                    has_more: payload.posts.page_info.has_next_page,
+                    next_cursor: payload.posts.page_info.end_cursor,
+                },
+            }
+        }))
     }
 
-    pub fn get_post(&self, post_id: &str) -> Result<Option<Post>, CommandError> {
-        let response: PostQueryResponse = self.graphql(
+    pub fn get_post(&self, post_id: &str) -> Result<ApiResponse<Option<Post>>, CommandError> {
+        let response: ApiResponse<PostQueryResponse> = self.graphql(
             POST_QUERY,
             json!({
                 "input": {
@@ -410,19 +469,43 @@ impl BufferClient {
                 }
             }),
         )?;
-        Ok(response.post)
+        Ok(response.map(|payload| payload.post))
     }
 
-    pub fn create_post(&self, input: Value) -> Result<Post, CommandError> {
-        let response: CreatePostMutationResponse =
+    pub fn daily_posting_limits(
+        &self,
+        channel_ids: &[String],
+        date: Option<&str>,
+    ) -> Result<ApiResponse<Vec<DailyPostingLimitStatus>>, CommandError> {
+        let response: ApiResponse<DailyPostingLimitsQueryResponse> = self.graphql(
+            DAILY_POSTING_LIMITS_QUERY,
+            json!({
+                "input": {
+                    "channelIds": channel_ids,
+                    "date": date,
+                }
+            }),
+        )?;
+
+        Ok(response.map(|payload| payload.daily_posting_limits))
+    }
+
+    pub fn create_post(&self, input: Value) -> Result<ApiResponse<Post>, CommandError> {
+        let response: ApiResponse<CreatePostMutationResponse> =
             self.graphql(CREATE_POST_MUTATION, json!({ "input": input }))?;
-        let payload = response.create_post;
+        let warnings = response.warnings;
+        let payload = response.data.create_post;
         let typename = payload
             .get("__typename")
             .and_then(Value::as_str)
-            .unwrap_or("Unknown");
+            .unwrap_or("Unknown")
+            .to_owned();
+        let message = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
 
-        match typename {
+        let post = match typename.as_str() {
             "PostActionSuccess" => {
                 let post_value = payload.get("post").cloned().ok_or_else(|| {
                     CommandError::failure(
@@ -470,20 +553,71 @@ impl BufferClient {
                 payload_message(&payload, "Buffer returned an unexpected error"),
                 "Retry the request after inspecting the returned message",
             )),
-            _ => Err(CommandError::failure(
-                "BUFFER_API_ERROR",
-                format!("unsupported createPost payload type `{typename}`"),
-                "Inspect the Buffer response and update the client mapping if the API changed",
-            )
-            .with_details(payload)),
-        }
+            _ => match message {
+                Some(message) => Err(CommandError::failure(
+                    "BUFFER_MUTATION_ERROR",
+                    message,
+                    "Adjust the request fields or inspect the Buffer response and retry",
+                )
+                .with_details(payload)),
+                None => Err(CommandError::failure(
+                    "BUFFER_API_ERROR",
+                    format!("unsupported createPost payload type `{typename}`"),
+                    "Inspect the Buffer response and update the client mapping if the API changed",
+                )
+                .with_details(payload)),
+            },
+        }?;
+
+        Ok(ApiResponse::new(post, warnings))
+    }
+
+    pub fn delete_post(&self, post_id: &str) -> Result<ApiResponse<String>, CommandError> {
+        let response: ApiResponse<DeletePostMutationResponse> =
+            self.graphql(DELETE_POST_MUTATION, json!({ "input": { "id": post_id } }))?;
+        let warnings = response.warnings;
+        let payload = response.data.delete_post;
+        let typename = payload
+            .get("__typename")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown")
+            .to_owned();
+        let message = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        let deleted_id = match typename.as_str() {
+            "DeletePostSuccess" => payload
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    CommandError::failure(
+                        "BUFFER_API_ERROR",
+                        "Buffer deletePost response did not include an id",
+                        "Inspect the response payload and retry",
+                    )
+                }),
+            _ => match message {
+                Some(message) => Err(map_delete_post_error(&typename, &message, payload)),
+                None => Err(CommandError::failure(
+                    "BUFFER_API_ERROR",
+                    format!("unsupported deletePost payload type `{typename}`"),
+                    "Inspect the Buffer response and update the client mapping if the API changed",
+                )
+                .with_details(payload)),
+            },
+        }?;
+
+        Ok(ApiResponse::new(deleted_id, warnings))
     }
 
     fn graphql<T: DeserializeOwned>(
         &self,
         query: &str,
         variables: Value,
-    ) -> Result<T, CommandError> {
+    ) -> Result<ApiResponse<T>, CommandError> {
         let payload = json!({
             "query": query,
             "variables": variables,
@@ -525,18 +659,26 @@ impl BufferClient {
             .with_details(json!({ "body": body }))
         })?;
 
-        if let Some(errors) = envelope.errors.filter(|items| !items.is_empty()) {
-            return Err(map_graphql_error(&errors));
-        }
+        let warnings = match envelope.errors {
+            Some(errors) if !errors.is_empty() => {
+                if envelope.data.is_none() {
+                    return Err(map_graphql_error(&errors));
+                }
+                graphql_warnings(&errors)
+            }
+            _ => Vec::new(),
+        };
 
-        envelope.data.ok_or_else(|| {
+        let data = envelope.data.ok_or_else(|| {
             CommandError::failure(
                 "BUFFER_API_ERROR",
                 "Buffer API returned no data",
                 "Retry the request after inspecting the response body",
             )
             .with_details(json!({ "body": body }))
-        })
+        })?;
+
+        Ok(ApiResponse::new(data, warnings))
     }
 }
 
@@ -584,6 +726,12 @@ struct PostsQueryResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DailyPostingLimitsQueryResponse {
+    daily_posting_limits: Vec<DailyPostingLimitStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PostsConnection {
     edges: Vec<PostEdge>,
     page_info: GraphqlPageInfo,
@@ -614,18 +762,36 @@ struct CreatePostMutationResponse {
     create_post: Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletePostMutationResponse {
+    delete_post: Value,
+}
+
 fn map_http_error(status: StatusCode, body: &str) -> CommandError {
     match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => CommandError::blocked(
+        StatusCode::UNAUTHORIZED => CommandError::blocked(
             "UNAUTHORIZED",
             "Buffer rejected the API token",
             "Refresh BUF_API_TOKEN and retry",
         )
         .with_details(json!({ "status": status.as_u16(), "body": body })),
+        StatusCode::FORBIDDEN => CommandError::blocked(
+            "FORBIDDEN",
+            "Buffer rejected the request for this resource",
+            "Verify the API key permissions and the requested resource ownership",
+        )
+        .with_details(json!({ "status": status.as_u16(), "body": body })),
+        StatusCode::NOT_FOUND => CommandError::failure(
+            "NOT_FOUND",
+            "Buffer resource was not found",
+            "Check the requested id and retry",
+        )
+        .with_details(json!({ "status": status.as_u16(), "body": body })),
         StatusCode::TOO_MANY_REQUESTS => CommandError::blocked(
             "RATE_LIMITED",
             "Buffer API rate limit reached",
-            "Retry after the current rate-limit window resets",
+            "Retry after the current rate-limit window resets or the documented retryAfter interval",
         )
         .with_details(json!({ "status": status.as_u16(), "body": body })),
         _ => CommandError::failure(
@@ -653,34 +819,92 @@ fn map_graphql_error(errors: &[GraphqlError]) -> CommandError {
         }).collect::<Vec<_>>()
     });
 
-    if code.eq_ignore_ascii_case("UNAUTHORIZED")
-        || first.message.to_ascii_lowercase().contains("unauthorized")
-    {
-        return CommandError::blocked(
+    match code {
+        "UNAUTHORIZED" => CommandError::blocked(
             "UNAUTHORIZED",
             first.message.clone(),
             "Refresh BUF_API_TOKEN and retry",
         )
-        .with_details(details);
-    }
-
-    if code.eq_ignore_ascii_case("RATE_LIMITED")
-        || first.message.to_ascii_lowercase().contains("rate")
-    {
-        return CommandError::blocked(
+        .with_details(details),
+        "FORBIDDEN" => CommandError::blocked(
+            "FORBIDDEN",
+            first.message.clone(),
+            "Verify the API key permissions and the requested resource ownership",
+        )
+        .with_details(details),
+        "NOT_FOUND" => CommandError::failure(
+            "NOT_FOUND",
+            first.message.clone(),
+            "Check the requested id and retry",
+        )
+        .with_details(details),
+        "RATE_LIMIT_EXCEEDED" => CommandError::blocked(
             "RATE_LIMITED",
             first.message.clone(),
-            "Retry after the current Buffer API rate-limit window resets",
+            "Retry after the current Buffer API rate-limit window resets or the documented retryAfter interval",
         )
-        .with_details(details);
+        .with_details(details),
+        "UNEXPECTED" => CommandError::failure(
+            "BUFFER_API_ERROR",
+            first.message.clone(),
+            "Retry after a short delay and inspect the full GraphQL response if the problem persists",
+        )
+        .with_details(details),
+        _ if first.message.to_ascii_lowercase().contains("unauthorized") => CommandError::blocked(
+            "UNAUTHORIZED",
+            first.message.clone(),
+            "Refresh BUF_API_TOKEN and retry",
+        )
+        .with_details(details),
+        _ if first.message.to_ascii_lowercase().contains("rate") => CommandError::blocked(
+            "RATE_LIMITED",
+            first.message.clone(),
+            "Retry after the current Buffer API rate-limit window resets or the documented retryAfter interval",
+        )
+        .with_details(details),
+        _ => CommandError::failure(
+            "BUFFER_API_ERROR",
+            first.message.clone(),
+            "Inspect the returned GraphQL errors and retry with a smaller or simpler request",
+        )
+        .with_details(details),
     }
+}
 
-    CommandError::failure(
-        "BUFFER_API_ERROR",
-        first.message.clone(),
-        "Inspect the returned GraphQL errors and retry with a smaller or simpler request",
-    )
-    .with_details(details)
+fn graphql_warnings(errors: &[GraphqlError]) -> Vec<BufferWarning> {
+    errors
+        .iter()
+        .map(|error| BufferWarning {
+            message: error.message.clone(),
+            code: error
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.code.clone()),
+        })
+        .collect()
+}
+
+fn map_delete_post_error(typename: &str, message: &str, payload: Value) -> CommandError {
+    match typename {
+        "UnauthorizedError" => CommandError::blocked(
+            "UNAUTHORIZED",
+            message.to_owned(),
+            "Refresh BUF_API_TOKEN and retry",
+        )
+        .with_details(payload),
+        "NotFoundError" => CommandError::failure(
+            "NOT_FOUND",
+            message.to_owned(),
+            "Check the requested post id and retry",
+        )
+        .with_details(payload),
+        _ => CommandError::failure(
+            "BUFFER_MUTATION_ERROR",
+            message.to_owned(),
+            "Inspect the Buffer response and retry",
+        )
+        .with_details(payload),
+    }
 }
 
 fn payload_message(payload: &Value, fallback: &str) -> String {

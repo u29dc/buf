@@ -57,6 +57,14 @@ fn main() -> ExitCode {
                     if !output.text.trim().is_empty() {
                         println!("{}", output.text);
                     }
+                    if let Some(warnings) = output.meta.warnings.as_ref() {
+                        for warning in warnings {
+                            match warning.code.as_deref() {
+                                Some(code) => eprintln!("WARN  [{code}] {}", warning.message),
+                                None => eprintln!("WARN  {}", warning.message),
+                            }
+                        }
+                    }
                 }
             }
             ExitCode::from(output.exit_status.code())
@@ -93,6 +101,12 @@ fn execute(command: Command, options: &GlobalOptions) -> commands::CommandResult
             crate::cli::PostsCommand::Create(create_args) => {
                 commands::posts::create(options, &create_args)
             }
+            crate::cli::PostsCommand::Delete(delete_args) => {
+                commands::posts::delete(options, &delete_args)
+            }
+            crate::cli::PostsCommand::Limits(limits_args) => {
+                commands::posts::limits(options, &limits_args)
+            }
         },
     }
 }
@@ -119,6 +133,8 @@ fn infer_tool_name(cli: &Cli) -> &'static str {
             crate::cli::PostsCommand::List(_) => "posts.list",
             crate::cli::PostsCommand::Get(_) => "posts.get",
             crate::cli::PostsCommand::Create(_) => "posts.create",
+            crate::cli::PostsCommand::Delete(_) => "posts.delete",
+            crate::cli::PostsCommand::Limits(_) => "posts.limits",
         },
         None => "buf",
     }

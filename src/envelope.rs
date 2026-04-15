@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::buffer_api::BufferWarning;
 use crate::commands::CommandMeta;
 use crate::error::CommandError;
 
@@ -21,6 +22,8 @@ struct EnvelopeMeta {
     total: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     has_more: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warnings: Option<Vec<BufferWarning>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +59,7 @@ pub fn emit_success(tool: &str, data: &Value, elapsed: u128, meta: &CommandMeta)
             count: meta.count,
             total: meta.total,
             has_more: meta.has_more,
+            warnings: meta.warnings.clone(),
         },
     };
 
@@ -82,6 +86,7 @@ pub fn emit_error(tool: &str, error: &CommandError, elapsed: u128) {
             count: None,
             total: None,
             has_more: None,
+            warnings: None,
         },
     };
 

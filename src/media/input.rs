@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use reqwest::Url;
+use reqwest::blocking::Client;
+use reqwest::header::{CONTENT_TYPE, RANGE};
 use serde::Deserialize;
 
 use crate::error::CommandError;
@@ -87,13 +90,13 @@ fn parse_remote_reference(value: &str, url: &Url) -> Result<MediaReference, Comm
         .path_segments()
         .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
         .unwrap_or("asset");
-    let (kind, content_type) = detect_kind_and_content_type_from_name(file_name)?;
+    let (kind, content_type) = detect_remote_kind(file_name, value)?;
 
     Ok(MediaReference::Remote(RemoteMediaReference {
         raw: value.to_owned(),
         kind,
         file_name: file_name.to_owned(),
-        content_type: content_type.to_owned(),
+        content_type,
     }))
 }
 
@@ -136,6 +139,99 @@ pub fn detect_kind_and_content_type_from_name(
             "Use a supported image or video file with an explicit file extension",
         )),
     }
+}
+
+fn detect_remote_kind(file_name: &str, url: &str) -> Result<(MediaKind, String), CommandError> {
+    if let Ok((kind, content_type)) = detect_kind_and_content_type_from_name(file_name) {
+        return Ok((kind, content_type.to_owned()));
+    }
+
+    detect_remote_kind_from_http(url)
+}
+
+fn detect_remote_kind_from_http(url: &str) -> Result<(MediaKind, String), CommandError> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|error| {
+            CommandError::failure(
+                "MEDIA_TYPE_UNSUPPORTED",
+                format!("failed to initialize HTTP client for remote media detection: {error}"),
+                "Retry with a URL that includes an explicit file extension",
+            )
+        })?;
+
+    if let Some(result) = probe_remote_content_type(&client, url)? {
+        return Ok(result);
+    }
+
+    Err(CommandError::failure(
+        "MEDIA_TYPE_UNSUPPORTED",
+        format!(
+            "unsupported remote media URL `{url}`: no usable file extension and no detectable image/video Content-Type"
+        ),
+        "Use a URL with an explicit file extension or a server that returns a standard image/* or video/* Content-Type",
+    ))
+}
+
+fn probe_remote_content_type(
+    client: &Client,
+    url: &str,
+) -> Result<Option<(MediaKind, String)>, CommandError> {
+    let head_response = client.head(url).send().map_err(|error| {
+        CommandError::failure(
+            "MEDIA_TYPE_UNSUPPORTED",
+            format!("failed to inspect remote media URL `{url}`: {error}"),
+            "Use a reachable public URL or add an explicit file extension",
+        )
+    })?;
+
+    if head_response.status().is_success()
+        && let Some(content_type) = media_content_type_from_headers(head_response.headers())
+    {
+        return Ok(Some(content_type));
+    }
+
+    let get_response = client
+        .get(url)
+        .header(RANGE, "bytes=0-0")
+        .send()
+        .map_err(|error| {
+            CommandError::failure(
+                "MEDIA_TYPE_UNSUPPORTED",
+                format!("failed to inspect remote media URL `{url}`: {error}"),
+                "Use a reachable public URL or add an explicit file extension",
+            )
+        })?;
+
+    if (get_response.status().is_success() || get_response.status().as_u16() == 206)
+        && let Some(content_type) = media_content_type_from_headers(get_response.headers())
+    {
+        return Ok(Some(content_type));
+    }
+
+    Ok(None)
+}
+
+fn media_content_type_from_headers(
+    headers: &reqwest::header::HeaderMap,
+) -> Option<(MediaKind, String)> {
+    let content_type = headers.get(CONTENT_TYPE)?.to_str().ok()?;
+    let normalized = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+
+    if normalized.starts_with("image/") {
+        return Some((MediaKind::Image, normalized));
+    }
+    if normalized.starts_with("video/") {
+        return Some((MediaKind::Video, normalized));
+    }
+
+    None
 }
 
 fn probe_media(path: &Path, kind: MediaKind) -> Result<MediaProbe, CommandError> {

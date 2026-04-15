@@ -52,7 +52,8 @@ pub fn run(options: &GlobalOptions) -> CommandResult {
 
     if runtime.settings.token.present {
         match build_client(&runtime).and_then(|client| client.list_organizations()) {
-            Ok(organizations) => {
+            Ok(response) => {
+                let organizations = response.data;
                 let needs_default =
                     runtime.settings.default_organization_id.is_none() && organizations.len() > 1;
                 checks.push(HealthCheck {
@@ -74,6 +75,28 @@ pub fn run(options: &GlobalOptions) -> CommandResult {
                         Value::Null
                     },
                 });
+                if !response.warnings.is_empty() {
+                    checks.push(HealthCheck {
+                        id: "api.warnings".to_owned(),
+                        label: "Buffer API Warnings".to_owned(),
+                        status: "warning".to_owned(),
+                        severity: "degraded".to_owned(),
+                        detail: format!(
+                            "{} upstream warning(s) returned with successful API responses",
+                            response.warnings.len()
+                        ),
+                        fix: json!(
+                            response
+                                .warnings
+                                .into_iter()
+                                .map(|warning| match warning.code {
+                                    Some(code) => format!("{code}: {}", warning.message),
+                                    None => warning.message,
+                                })
+                                .collect::<Vec<_>>()
+                        ),
+                    });
+                }
             }
             Err(error) => checks.push(HealthCheck {
                 id: "api.auth".to_owned(),

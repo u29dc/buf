@@ -1,4 +1,4 @@
-> `buf` is a Rust CLI for agents that discovers Buffer organizations and channels, inspects posts, normalizes local media with `ffmpeg` and `ffprobe`, stages it to Cloudflare R2, and creates Buffer posts through the public GraphQL API.
+> `buf` is a Rust CLI for agents that discovers Buffer organizations and channels, inspects posts, reads daily posting limits, normalizes local media with `ffmpeg` and `ffprobe`, stages it to Cloudflare R2, and manages Buffer posts through the public GraphQL API.
 
 ## 1. Documentation
 
@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | Runtime | Rust 2024 | single binary crate with `unsafe_code = "forbid"` |
 | CLI | `clap` | noun-first subcommands, JSON-first output, `--text` override |
-| Buffer transport | GraphQL over blocking `reqwest` | documented queries plus `createPost` mutation only |
+| Buffer transport | GraphQL over blocking `reqwest` | documented queries plus `createPost`, `deletePost`, and `dailyPostingLimits` |
 | Media pipeline | `ffprobe` + `ffmpeg` | local probe, profile fit, normalization to JPEG or H.264/AAC MP4 |
 | Storage | Cloudflare R2 via AWS S3 SDK | public-read URL plus authenticated S3-compatible upload |
 | Async bridge | local `tokio` runtime inside storage provider | keeps the main CLI synchronous |
@@ -54,6 +54,7 @@
 - `./target/debug/buf channels list --service instagram --limit 10` and `./target/debug/buf channels resolve --service threads` are the primary discovery commands for org-scoped channel work.
 - `./target/debug/buf posts list --service instagram --status sent --limit 10` and `./target/debug/buf posts get <post-id>` are the canonical read paths for publication state and `publishedUrl`.
 - `./target/debug/buf posts create --channel <id> --body-file ./post.md --media ./asset.jpg --target draft --dry-run` is the safest write-path smoke test.
+- `./target/debug/buf posts delete <post-id>` deletes one Buffer post by id, and `./target/debug/buf posts limits --service instagram` reads daily posting limits for matching channels.
 - `bun run util:check` is the required quality gate. `bun run build` also copies the release binary into `${BUF_HOME:-${TOOLS_HOME:-$HOME/.tools}/buf}/buf`.
 
 ## 5. Architecture
@@ -61,10 +62,10 @@
 - [`src/main.rs`](src/main.rs) parses the CLI, defaults stdout to JSON, dispatches commands, and maps success or failure to exit codes `0`, `1`, and `2`.
 - [`src/envelope.rs`](src/envelope.rs) defines the public envelope. JSON mode must emit exactly one stdout line with `{ ok, data | error, meta }`; `--text` is a human-readable escape hatch.
 - [`src/tool_registry.rs`](src/tool_registry.rs) is the single source for `buf tools`. Keep command strings, examples, input schemas, output fields, and flags synchronized with [`src/cli.rs`](src/cli.rs) and [`tests/cli_contract.rs`](tests/cli_contract.rs).
-- [`src/buffer_api.rs`](src/buffer_api.rs) owns documented GraphQL queries and the only implemented write mutation, `createPost`. Do not invent undocumented Buffer mutations or local-upload API behavior.
+- [`src/buffer_api.rs`](src/buffer_api.rs) owns documented GraphQL queries, documented mutations, and upstream warning handling. Do not invent undocumented Buffer mutations or local-upload API behavior.
 - [`src/commands/posts.rs`](src/commands/posts.rs) resolves exactly one body source, injects `publishedUrl` from Buffer `externalLink`, and resolves `--service` post filters to channel ids because Buffer post filtering is channel-based, not service-based.
-- [`src/media/`](src/media/) keeps one public media surface: repeatable `--media`. Local paths are probed, profile-checked, normalized, and staged; remote URLs pass through unchanged after scheme and extension checks.
-- [`src/media/profile.rs`](src/media/profile.rs) encodes service rules: Instagram auto-promotes multiple images to `carousel`, story and reel stay single-asset, LinkedIn allows one asset and default `post` only, Threads allows multiple images or one video but no service-specific metadata yet.
+- [`src/media/`](src/media/) keeps one public media surface: repeatable `--media`. Local paths are probed, profile-checked, normalized, and staged; remote URLs pass through unchanged after scheme validation plus filename-extension or HTTP `Content-Type` detection.
+- [`src/media/profile.rs`](src/media/profile.rs) encodes service rules: Instagram auto-promotes multiple images to `carousel`, story and reel stay single-asset, LinkedIn allows one asset and default `post` only, and Threads allows multiple images or one video plus documented metadata via `--meta-json` and `--link-url`.
 - [`src/storage/service.rs`](src/storage/service.rs) is the only staging boundary. Commands and Buffer requests should operate on hosted asset URLs, not provider-specific upload details.
 
 ## 6. Runtime and State
@@ -78,7 +79,7 @@
 - `config show` and `config validate` expose masked secret provenance (`process` vs `envFile`) without calling Buffer. `health` also creates or probes the home and temp dirs, checks `ffmpeg` and `ffprobe`, validates R2 readiness, and calls Buffer org discovery when a token is present.
 - Readiness commands report structured status in `data` even on non-zero exits. `health` can return `ok: true` with `data.status = "blocked"` and exit `2`; `config.validate` can return `ok: true` with `valid: false` and exit `1` for parse errors.
 - Local-media dry-runs still require `ffprobe` and complete `BUF_MEDIA_*` settings because the CLI probes the file and plans an R2 key even when it skips normalization and upload.
-- Non-dry-run local media writes create a temporary workdir under `BUF_HOME/tmp`, normalize files there, then upload to a public R2 URL. Remote media does not get dimension probing; it is accepted or rejected locally based on URL scheme and filename extension only.
+- Non-dry-run local media writes create a temporary workdir under `BUF_HOME/tmp`, normalize files there, then upload to a public R2 URL. Remote media does not get dimension probing; it is accepted or rejected locally based on URL scheme plus either filename extension or an HTTP `Content-Type` probe.
 
 ## 7. Conventions
 
@@ -92,7 +93,7 @@
 - Do not post to live Buffer accounts for routine verification. Prefer `--dry-run`, read-only commands, and mocked tests unless the user explicitly requests a live write.
 - Do not commit operator data from `~/.tools/buf`, `.env`, `buf.config.toml`, `.tmp/`, staged asset URLs, or other runtime state.
 - Treat [`src/envelope.rs`](src/envelope.rs), [`src/tool_registry.rs`](src/tool_registry.rs), and [`tests/cli_contract.rs`](tests/cli_contract.rs) as high-risk contract files. Small drift there breaks agents quickly.
-- Treat remote `--media` URLs without a usable filename extension as unsupported. The current detector classifies remote media from the URL path, not from HTTP headers.
+- Treat remote `--media` URLs as unsupported only when they expose neither a usable filename extension nor a standard `image/*` or `video/*` HTTP `Content-Type`.
 - Do not hand-edit local or generated artifacts in `target/`, `.tmp/`, or `.husky/_/`. Regenerate or ignore them as appropriate.
 - The ignored smoke test in [`src/storage/service.rs`](src/storage/service.rs) talks to live R2. Keep it disposable, use temporary objects only, and rely on the `tmp/buf/` lifecycle cleanup strategy.
 

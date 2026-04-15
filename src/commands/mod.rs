@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::buffer_api::{BufferClient, Channel, Organization};
+use crate::buffer_api::{BufferClient, BufferWarning, Channel, Organization};
 use crate::cli::ChannelService;
 use crate::config::{PathOverrides, ResolvedSettings, RuntimeContext};
 use crate::error::{CommandError, ProcessExit};
@@ -20,6 +20,7 @@ pub struct CommandMeta {
     pub count: Option<usize>,
     pub total: Option<usize>,
     pub has_more: Option<bool>,
+    pub warnings: Option<Vec<BufferWarning>>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +77,14 @@ impl CommandOutput {
     }
 
     #[must_use]
+    pub fn with_warnings(mut self, warnings: Vec<BufferWarning>) -> Self {
+        if !warnings.is_empty() {
+            self.meta.warnings = Some(warnings);
+        }
+        self
+    }
+
+    #[must_use]
     pub const fn with_exit_status(mut self, exit_status: ProcessExit) -> Self {
         self.exit_status = exit_status;
         self
@@ -115,8 +124,10 @@ pub fn build_client(runtime: &RuntimeContext) -> Result<BufferClient, CommandErr
 pub fn resolve_organization_id(
     client: &BufferClient,
     settings: &ResolvedSettings,
-) -> Result<(String, Vec<Organization>), CommandError> {
-    let organizations = client.list_organizations()?;
+) -> Result<(String, Vec<Organization>, Vec<BufferWarning>), CommandError> {
+    let response = client.list_organizations()?;
+    let organizations = response.data;
+    let warnings = response.warnings;
     if organizations.is_empty() {
         return Err(CommandError::failure(
             "ORG_NOT_FOUND",
@@ -130,7 +141,7 @@ pub fn resolve_organization_id(
             .iter()
             .any(|organization| organization.id == explicit_id)
         {
-            return Ok((explicit_id.to_owned(), organizations));
+            return Ok((explicit_id.to_owned(), organizations, warnings));
         }
         return Err(CommandError::failure(
             "ORG_NOT_FOUND",
@@ -144,7 +155,7 @@ pub fn resolve_organization_id(
     }
 
     if organizations.len() == 1 {
-        return Ok((organizations[0].id.clone(), organizations));
+        return Ok((organizations[0].id.clone(), organizations, warnings));
     }
 
     Err(CommandError::blocked(
@@ -178,6 +189,7 @@ pub fn resolve_default_channel_id(
         ChannelService::Instagram => settings.default_channels.instagram.as_deref(),
         ChannelService::LinkedIn => settings.default_channels.linkedin.as_deref(),
         ChannelService::Threads => settings.default_channels.threads.as_deref(),
+        _ => None,
     }
 }
 

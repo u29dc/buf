@@ -39,6 +39,20 @@ pub struct GlobalFlag {
 }
 
 static TOOL_REGISTRY: OnceLock<Vec<ToolMetadata>> = OnceLock::new();
+static DOCUMENTED_SERVICES: [&str; 12] = [
+    "instagram",
+    "facebook",
+    "twitter",
+    "linkedin",
+    "pinterest",
+    "tiktok",
+    "googlebusiness",
+    "startPage",
+    "mastodon",
+    "youtube",
+    "threads",
+    "bluesky",
+];
 
 pub fn tool_registry() -> &'static [ToolMetadata] {
     TOOL_REGISTRY
@@ -53,6 +67,8 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                 posts_list_tool(),
                 posts_get_tool(),
                 posts_create_tool(),
+                posts_delete_tool(),
+                posts_limits_tool(),
             ];
             tools.sort_by(|left, right| {
                 left.category
@@ -234,7 +250,7 @@ fn config_validate_tool() -> ToolMetadata {
 fn channels_list_tool() -> ToolMetadata {
     ToolMetadata {
         name: "channels.list",
-        command: "buf channels list [--service instagram|linkedin|threads] [--query <text>] [--limit <n>]",
+        command: "buf channels list [--service <service>] [--query <text>] [--limit <n>]",
         category: "channels",
         description: "List channels for the resolved organization with optional service and text filters.",
         parameters: vec![
@@ -242,7 +258,7 @@ fn channels_list_tool() -> ToolMetadata {
                 "--service",
                 "string",
                 false,
-                "Filter by `instagram`, `linkedin`, or `threads`.",
+                "Filter by a documented Buffer service value such as `instagram`, `linkedin`, or `threads`.",
             ),
             parameter(
                 "--query",
@@ -271,7 +287,7 @@ fn channels_list_tool() -> ToolMetadata {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "service": { "type": "string", "enum": ["instagram", "linkedin", "threads"] },
+                "service": { "type": "string", "enum": DOCUMENTED_SERVICES },
                 "query": { "type": "string" },
                 "limit": { "type": "integer", "minimum": 1 }
             },
@@ -286,7 +302,7 @@ fn channels_list_tool() -> ToolMetadata {
 fn channels_resolve_tool() -> ToolMetadata {
     ToolMetadata {
         name: "channels.resolve",
-        command: "buf channels resolve --service instagram|linkedin|threads [--query <text>]",
+        command: "buf channels resolve --service <service> [--query <text>]",
         category: "channels",
         description: "Resolve exactly one channel or fail with a deterministic ambiguity error.",
         parameters: vec![
@@ -311,7 +327,7 @@ fn channels_resolve_tool() -> ToolMetadata {
             "type": "object",
             "required": ["service"],
             "properties": {
-                "service": { "type": "string", "enum": ["instagram", "linkedin", "threads"] },
+                "service": { "type": "string", "enum": DOCUMENTED_SERVICES },
                 "query": { "type": "string" }
             },
             "additionalProperties": false
@@ -325,9 +341,9 @@ fn channels_resolve_tool() -> ToolMetadata {
 fn posts_list_tool() -> ToolMetadata {
     ToolMetadata {
         name: "posts.list",
-        command: "buf posts list [--channel <id>] [--service instagram|linkedin|threads] [--status draft|needs_approval|scheduled|sending|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]",
+        command: "buf posts list [--channel <id>] [--service <service>] [--status draft|needs_approval|scheduled|sending|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]",
         category: "posts",
-        description: "List posts for the resolved organization with cursor pagination. Returned post objects include publishedUrl as a non-breaking alias for Buffer externalLink.",
+        description: "List posts for the resolved organization with cursor pagination. `--from` and `--to` currently map to Buffer's `dueAt` comparator. Returned post objects include publishedUrl as a non-breaking alias for Buffer externalLink.",
         parameters: vec![
             parameter("--channel", "string", false, "Optional Buffer channel id."),
             parameter(
@@ -382,7 +398,7 @@ fn posts_list_tool() -> ToolMetadata {
             "type": "object",
             "properties": {
                 "channel": { "type": "string" },
-                "service": { "type": "string", "enum": ["instagram", "linkedin", "threads"] },
+                "service": { "type": "string", "enum": DOCUMENTED_SERVICES },
                 "status": {
                     "type": "string",
                     "enum": ["draft", "needs_approval", "scheduled", "sending", "sent", "error"]
@@ -433,7 +449,7 @@ fn posts_get_tool() -> ToolMetadata {
 fn posts_create_tool() -> ToolMetadata {
     ToolMetadata {
         name: "posts.create",
-        command: "buf posts create --channel <channel-id> [--body <text> | --body-file <path> | --stdin] [--target draft|schedule|queue|next|now] [--at <iso>] [--delivery automatic|notification] [--type post|carousel|story|reel] [--media <path-or-url> ...] [--first-comment <text>] [--link-url <url>] [--share-to-feed] [--meta-json <json>] [--dry-run]",
+        command: "buf posts create --channel <channel-id> [--body <text> | --body-file <path> | --stdin] [--target draft|schedule|queue|next|now|recommended] [--at <iso>] [--delivery automatic|notification] [--type post|carousel|story|reel] [--media <path-or-url> ...] [--first-comment <text>] [--link-url <url>] [--share-to-feed] [--meta-json <json-string>] [--dry-run]",
         category: "posts",
         description: "Create a draft, scheduled post, queued post, or immediate post through Buffer with one unified media input surface. Returned post includes publishedUrl as a non-breaking alias for Buffer externalLink when available.",
         parameters: vec![
@@ -455,7 +471,7 @@ fn posts_create_tool() -> ToolMetadata {
                 "--target",
                 "string",
                 false,
-                "One of draft, schedule, queue, next, or now.",
+                "One of draft, schedule, queue, next, now, or recommended.",
             ),
             parameter(
                 "--at",
@@ -491,7 +507,7 @@ fn posts_create_tool() -> ToolMetadata {
                 "--link-url",
                 "string",
                 false,
-                "Instagram link or LinkedIn link attachment URL.",
+                "Instagram Shop Grid link or LinkedIn/Threads link attachment URL.",
             ),
             parameter(
                 "--share-to-feed",
@@ -501,9 +517,9 @@ fn posts_create_tool() -> ToolMetadata {
             ),
             parameter(
                 "--meta-json",
-                "json",
+                "string",
                 false,
-                "Service-specific metadata object merged into Instagram or LinkedIn metadata.",
+                "JSON object string merged into Instagram, LinkedIn, or Threads metadata.",
             ),
             parameter(
                 "--dry-run",
@@ -538,7 +554,7 @@ fn posts_create_tool() -> ToolMetadata {
                 "body": { "type": "string" },
                 "bodyFile": { "type": "string" },
                 "stdin": { "type": "boolean" },
-                "target": { "type": "string", "enum": ["draft", "schedule", "queue", "next", "now"] },
+                "target": { "type": "string", "enum": ["draft", "schedule", "queue", "next", "now", "recommended"] },
                 "at": { "type": "string" },
                 "delivery": { "type": "string", "enum": ["automatic", "notification"] },
                 "type": { "type": "string", "enum": ["post", "carousel", "story", "reel"] },
@@ -546,7 +562,7 @@ fn posts_create_tool() -> ToolMetadata {
                 "firstComment": { "type": "string" },
                 "linkUrl": { "type": "string" },
                 "shareToFeed": { "type": "boolean" },
-                "metaJson": { "type": "object" },
+                "metaJson": { "type": "string" },
                 "dryRun": { "type": "boolean" }
             },
             "additionalProperties": false
@@ -554,6 +570,92 @@ fn posts_create_tool() -> ToolMetadata {
         idempotent: false,
         rate_limit: Some("Buffer API limits apply; prefer drafts first for new automation."),
         example: "buf posts create --channel ch_123 --body-file ./post.md --media ./asset.jpg --target draft",
+    }
+}
+
+fn posts_delete_tool() -> ToolMetadata {
+    ToolMetadata {
+        name: "posts.delete",
+        command: "buf posts delete <post-id>",
+        category: "posts",
+        description: "Delete one Buffer post by id.",
+        parameters: vec![parameter("post-id", "string", true, "Buffer post id.")],
+        output_fields: vec!["deleted", "postId"],
+        output_schema: json!({
+            "type": "object",
+            "required": ["deleted", "postId"],
+            "properties": {
+                "deleted": { "type": "boolean" },
+                "postId": { "type": "string" }
+            },
+            "additionalProperties": false
+        }),
+        input_schema: json!({
+            "type": "object",
+            "required": ["postId"],
+            "properties": {
+                "postId": { "type": "string" }
+            },
+            "additionalProperties": false
+        }),
+        idempotent: false,
+        rate_limit: Some(
+            "Buffer API limits apply; prefer explicit operator intent before destructive actions.",
+        ),
+        example: "buf posts delete post_123",
+    }
+}
+
+fn posts_limits_tool() -> ToolMetadata {
+    ToolMetadata {
+        name: "posts.limits",
+        command: "buf posts limits [--channel <id> ...] [--service <service>] [--date <iso>]",
+        category: "posts",
+        description: "Return Buffer daily posting limit status for explicit channel ids or all channels matching one service.",
+        parameters: vec![
+            parameter(
+                "--channel",
+                "array",
+                false,
+                "Repeatable Buffer channel id. Use one or more ids, or use --service to resolve matching channels automatically.",
+            ),
+            parameter(
+                "--service",
+                "string",
+                false,
+                "Optional Buffer service value used to resolve matching channels before querying daily limits.",
+            ),
+            parameter(
+                "--date",
+                "string",
+                false,
+                "Optional RFC 3339 timestamp for the date to inspect. Defaults to Buffer's current date if omitted.",
+            ),
+        ],
+        output_fields: vec!["limits", "query"],
+        output_schema: json!({
+            "type": "object",
+            "required": ["limits", "query"],
+            "properties": {
+                "limits": { "type": "array" },
+                "query": { "type": "object" }
+            },
+            "additionalProperties": false
+        }),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "channelIds": { "type": "array", "items": { "type": "string" } },
+                "service": { "type": "string", "enum": DOCUMENTED_SERVICES },
+                "date": { "type": "string" }
+            },
+            "additionalProperties": false
+        }),
+        idempotent: true,
+        rate_limit: Some(
+            "Buffer API limits apply; cache daily limit reads when polling multiple channels.",
+        ),
+        example: "buf posts limits --service instagram",
     }
 }
 

@@ -151,6 +151,16 @@ fn sample_post_with_fields(
     })
 }
 
+fn sample_daily_posting_limit_status(channel_id: &str, limit: Option<u64>) -> Value {
+    serde_json::json!({
+        "channelId": channel_id,
+        "sent": 1,
+        "scheduled": 2,
+        "limit": limit,
+        "isAtLimit": false
+    })
+}
+
 #[test]
 fn tools_catalog_is_json_first() {
     let home = TempDir::new().expect("temp dir");
@@ -181,7 +191,7 @@ fn tools_catalog_is_json_first() {
     assert_eq!(
         posts_list_tool["command"],
         Value::String(
-            "buf posts list [--channel <id>] [--service instagram|linkedin|threads] [--status draft|needs_approval|scheduled|sending|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]".to_owned()
+            "buf posts list [--channel <id>] [--service <service>] [--status draft|needs_approval|scheduled|sending|sent|error] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <cursor>]".to_owned()
         )
     );
     assert_eq!(
@@ -216,6 +226,24 @@ fn tools_catalog_is_json_first() {
             .iter()
             .any(|field| field == "post.publishedUrl")
     );
+
+    let posts_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "posts.create")
+        .expect("posts.create tool");
+    assert_eq!(
+        posts_create_tool["inputSchema"]["properties"]["metaJson"]["type"],
+        Value::String("string".to_owned())
+    );
+    assert!(
+        posts_create_tool["command"]
+            .as_str()
+            .expect("posts.create command")
+            .contains("recommended")
+    );
+
+    assert!(tools.iter().any(|tool| tool["name"] == "posts.delete"));
+    assert!(tools.iter().any(|tool| tool["name"] == "posts.limits"));
 }
 
 #[test]
@@ -303,6 +331,43 @@ async fn channels_list_reads_mocked_buffer_channels() {
 }
 
 #[tokio::test]
+async fn channels_list_maps_graphql_rate_limit_exceeded_code() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query AccountOrganizations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": null,
+            "errors": [
+                {
+                    "message": "Too many requests from this client. Please try again later.",
+                    "extensions": {
+                        "code": "RATE_LIMIT_EXCEEDED"
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args(["--api-base-url", &server.uri(), "channels", "list"])
+        .output()
+        .expect("run channels list");
+
+    assert_eq!(output.status.code(), Some(2));
+    let payload = parse_single_json_line(&output);
+    assert_eq!(payload["ok"], Value::Bool(false));
+    assert_eq!(
+        payload["error"]["code"],
+        Value::String("RATE_LIMITED".to_owned())
+    );
+}
+
+#[tokio::test]
 async fn posts_create_dry_run_returns_normalized_request() {
     let server = MockServer::start().await;
     let home = TempDir::new().expect("temp dir");
@@ -366,6 +431,10 @@ async fn posts_create_dry_run_returns_normalized_request() {
         payload["data"]["request"]["metadata"]["instagram"]["firstComment"],
         Value::String("More in comments".to_owned())
     );
+    assert_eq!(
+        payload["data"]["request"]["metadata"]["instagram"]["shouldShareToFeed"],
+        Value::Bool(false)
+    );
     let public_url = payload["data"]["stagedMedia"]["items"][0]["staged"]["publicUrl"]
         .as_str()
         .expect("dry-run public url");
@@ -373,6 +442,95 @@ async fn posts_create_dry_run_returns_normalized_request() {
     assert_eq!(
         payload["data"]["request"]["assets"]["images"][0]["url"],
         Value::String(public_url.to_owned())
+    );
+}
+
+#[tokio::test]
+async fn posts_create_draft_dry_run_uses_queue_mode_and_default_instagram_feed_flag() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query ChannelById"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channel": sample_channel("instagram")
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "create",
+            "--channel",
+            "ch_123",
+            "--body",
+            "Hello draft",
+            "--target",
+            "draft",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run posts create dry-run");
+
+    assert!(output.status.success(), "dry-run create should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(payload["data"]["request"]["saveToDraft"], Value::Bool(true));
+    assert_eq!(
+        payload["data"]["request"]["mode"],
+        Value::String("addToQueue".to_owned())
+    );
+    assert_eq!(
+        payload["data"]["request"]["metadata"]["instagram"]["shouldShareToFeed"],
+        Value::Bool(false)
+    );
+}
+
+#[tokio::test]
+async fn posts_create_recommended_dry_run_uses_recommended_time_mode() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query ChannelById"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channel": sample_channel("instagram")
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "create",
+            "--channel",
+            "ch_123",
+            "--body",
+            "Hello recommended",
+            "--target",
+            "recommended",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run posts create dry-run");
+
+    assert!(output.status.success(), "dry-run create should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["data"]["request"]["mode"],
+        Value::String("recommendedTime".to_owned())
     );
 }
 
@@ -434,7 +592,10 @@ async fn posts_create_threads_dry_run_returns_normalized_request() {
         payload["data"]["channel"]["service"],
         Value::String("threads".to_owned())
     );
-    assert_eq!(payload["data"]["request"]["metadata"], Value::Null);
+    assert_eq!(
+        payload["data"]["request"]["metadata"]["threads"]["type"],
+        Value::String("post".to_owned())
+    );
     let public_url = payload["data"]["stagedMedia"]["items"][0]["staged"]["publicUrl"]
         .as_str()
         .expect("dry-run public url");
@@ -442,6 +603,54 @@ async fn posts_create_threads_dry_run_returns_normalized_request() {
     assert_eq!(
         payload["data"]["request"]["assets"]["images"][0]["url"],
         Value::String(public_url.to_owned())
+    );
+}
+
+#[tokio::test]
+async fn posts_create_threads_dry_run_accepts_link_url_and_meta_json() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query ChannelById"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channel": sample_channel("threads")
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "create",
+            "--channel",
+            "ch_123",
+            "--body",
+            "Hello Threads",
+            "--link-url",
+            "https://example.com/story",
+            "--meta-json",
+            "{\"topic\":\"launch\"}",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run posts create dry-run");
+
+    assert!(output.status.success(), "dry-run create should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["data"]["request"]["metadata"]["threads"]["topic"],
+        Value::String("launch".to_owned())
+    );
+    assert_eq!(
+        payload["data"]["request"]["metadata"]["threads"]["linkAttachment"]["url"],
+        Value::String("https://example.com/story".to_owned())
     );
 }
 
@@ -585,6 +794,115 @@ async fn posts_create_threads_remote_url_calls_create_post() {
 }
 
 #[tokio::test]
+async fn posts_create_extensionless_remote_image_url_uses_content_type_detection() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("HEAD"))
+        .and(path("/image"))
+        .respond_with(ResponseTemplate::new(200).insert_header("content-type", "image/jpeg"))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query ChannelById"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channel": sample_channel("instagram")
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("mutation CreatePost"))
+        .and(body_string_contains(format!(
+            "\"url\":\"{}/image\"",
+            server.uri()
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "createPost": {
+                    "__typename": "PostActionSuccess",
+                    "post": sample_post("instagram")
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "create",
+            "--channel",
+            "ch_123",
+            "--body",
+            "Hello Buffer",
+            "--media",
+            &format!("{}/image", server.uri()),
+        ])
+        .output()
+        .expect("run posts create");
+
+    assert!(output.status.success(), "create should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(payload["ok"], Value::Bool(true));
+    assert_eq!(
+        payload["data"]["request"]["assets"]["images"][0]["url"],
+        Value::String(format!("{}/image", server.uri()))
+    );
+}
+
+#[tokio::test]
+async fn posts_create_rejects_threads_link_attachment_with_video() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query ChannelById"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channel": sample_channel("threads")
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "create",
+            "--channel",
+            "ch_123",
+            "--body",
+            "Hello Threads",
+            "--media",
+            "https://example.com/video.mp4",
+            "--link-url",
+            "https://example.com/story",
+        ])
+        .output()
+        .expect("run posts create");
+
+    assert_eq!(output.status.code(), Some(1));
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["error"]["code"],
+        Value::String("VALIDATION_ERROR".to_owned())
+    );
+}
+
+#[tokio::test]
 async fn posts_get_returns_published_url_alias_for_sent_post() {
     let server = MockServer::start().await;
     let home = TempDir::new().expect("temp dir");
@@ -615,6 +933,85 @@ async fn posts_get_returns_published_url_alias_for_sent_post() {
     assert_eq!(
         payload["data"]["post"]["publishedUrl"],
         Value::String(sample_post_external_link("linkedin").to_owned())
+    );
+}
+
+#[tokio::test]
+async fn posts_get_surfaces_graphql_warnings_in_meta() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query GetPost"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "post": sample_sent_post("linkedin")
+            },
+            "errors": [
+                {
+                    "message": "Link preview fallback used",
+                    "extensions": {
+                        "code": "WARNING"
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args(["--api-base-url", &server.uri(), "posts", "get", "post_123"])
+        .output()
+        .expect("run posts get");
+
+    assert!(output.status.success(), "posts get should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["meta"]["warnings"][0]["message"],
+        Value::String("Link preview fallback used".to_owned())
+    );
+    assert_eq!(
+        payload["meta"]["warnings"][0]["code"],
+        Value::String("WARNING".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn posts_get_maps_graphql_not_found_code() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query GetPost"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": null,
+            "errors": [
+                {
+                    "message": "Post not found",
+                    "extensions": {
+                        "code": "NOT_FOUND"
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args(["--api-base-url", &server.uri(), "posts", "get", "post_123"])
+        .output()
+        .expect("run posts get");
+
+    assert_eq!(output.status.code(), Some(1));
+    let payload = parse_single_json_line(&output);
+    assert_eq!(payload["ok"], Value::Bool(false));
+    assert_eq!(
+        payload["error"]["code"],
+        Value::String("NOT_FOUND".to_owned())
     );
 }
 
@@ -792,5 +1189,130 @@ async fn posts_list_uses_nested_due_at_filter_for_date_bounds() {
     assert_eq!(
         body["variables"]["input"]["filter"]["dueAtStop"],
         Value::Null
+    );
+}
+
+#[tokio::test]
+async fn posts_delete_returns_deleted_post_id() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("mutation DeletePost"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "deletePost": {
+                    "__typename": "DeletePostSuccess",
+                    "id": "post_123"
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "delete",
+            "post_123",
+        ])
+        .output()
+        .expect("run posts delete");
+
+    assert!(output.status.success(), "posts delete should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(payload["data"]["deleted"], Value::Bool(true));
+    assert_eq!(
+        payload["data"]["postId"],
+        Value::String("post_123".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn posts_limits_resolves_service_channels_and_returns_daily_limits() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query AccountOrganizations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "account": {
+                    "organizations": [sample_organization()]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query OrganizationChannels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channels": [
+                    sample_channel_with_id("instagram", "ig_123"),
+                    sample_channel_with_id("instagram", "ig_456"),
+                    sample_channel_with_id("linkedin", "li_123")
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query DailyPostingLimits"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "dailyPostingLimits": [
+                    sample_daily_posting_limit_status("ig_123", Some(25)),
+                    sample_daily_posting_limit_status("ig_456", Some(25))
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "limits",
+            "--service",
+            "instagram",
+            "--date",
+            "2026-03-26T00:00:00Z",
+        ])
+        .output()
+        .expect("run posts limits");
+
+    assert!(output.status.success(), "posts limits should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["data"]["limits"][0]["channelId"],
+        Value::String("ig_123".to_owned())
+    );
+    assert_eq!(
+        payload["data"]["limits"][0]["limit"],
+        Value::Number(25.into())
+    );
+
+    let requests = server.received_requests().await.expect("received requests");
+    let limits_request = requests
+        .iter()
+        .find(|request| String::from_utf8_lossy(&request.body).contains("query DailyPostingLimits"))
+        .expect("limits request");
+    let body: Value = serde_json::from_slice(&limits_request.body).expect("request body json");
+    assert_eq!(
+        body["variables"]["input"]["channelIds"],
+        serde_json::json!(["ig_123", "ig_456"])
     );
 }

@@ -105,6 +105,8 @@ pub enum PostsCommand {
     List(PostsListArgs),
     Get(PostsGetArgs),
     Create(PostsCreateArgs),
+    Delete(PostsDeleteArgs),
+    Limits(PostsLimitsArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -135,6 +137,24 @@ pub struct PostsListArgs {
 pub struct PostsGetArgs {
     #[arg(value_name = "POST_ID")]
     pub post_id: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PostsDeleteArgs {
+    #[arg(value_name = "POST_ID")]
+    pub post_id: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PostsLimitsArgs {
+    #[arg(long = "channel", value_name = "CHANNEL_ID")]
+    pub channel_ids: Vec<String>,
+
+    #[arg(long)]
+    pub service: Option<ChannelService>,
+
+    #[arg(long, value_name = "ISO-8601")]
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -185,9 +205,22 @@ pub struct PostsCreateArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ChannelService {
     Instagram,
+    Facebook,
+    #[value(alias = "x")]
+    Twitter,
     #[value(name = "linkedin", alias = "linked-in")]
     LinkedIn,
+    Pinterest,
+    #[value(name = "tiktok", alias = "tik-tok")]
+    TikTok,
+    #[value(name = "googlebusiness", alias = "google-business")]
+    GoogleBusiness,
+    #[value(name = "startPage", alias = "startpage", alias = "start-page")]
+    StartPage,
+    Mastodon,
+    YouTube,
     Threads,
+    Bluesky,
 }
 
 impl ChannelService {
@@ -195,8 +228,17 @@ impl ChannelService {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Instagram => "instagram",
+            Self::Facebook => "facebook",
+            Self::Twitter => "twitter",
             Self::LinkedIn => "linkedin",
+            Self::Pinterest => "pinterest",
+            Self::TikTok => "tiktok",
+            Self::GoogleBusiness => "googlebusiness",
+            Self::StartPage => "startPage",
+            Self::Mastodon => "mastodon",
+            Self::YouTube => "youtube",
             Self::Threads => "threads",
+            Self::Bluesky => "bluesky",
         }
     }
 }
@@ -234,6 +276,8 @@ pub enum CreateTarget {
     Queue,
     Next,
     Now,
+    #[value(name = "recommended", alias = "recommended-time")]
+    Recommended,
 }
 
 impl CreateTarget {
@@ -245,6 +289,7 @@ impl CreateTarget {
             Self::Queue => "addToQueue",
             Self::Next => "shareNext",
             Self::Now => "shareNow",
+            Self::Recommended => "recommendedTime",
         }
     }
 }
@@ -291,7 +336,8 @@ mod tests {
     use clap::Parser;
 
     use super::{
-        ChannelService, ChannelsCommand, Cli, Command, PostStatus, PostsArgs, PostsCommand,
+        ChannelService, ChannelsCommand, Cli, Command, CreateTarget, PostStatus, PostsArgs,
+        PostsCommand,
     };
 
     #[test]
@@ -336,6 +382,46 @@ mod tests {
                 assert_eq!(list.status.expect("status"), PostStatus::NeedsApproval);
             }
             _ => panic!("expected posts list"),
+        }
+    }
+
+    #[test]
+    fn recommended_target_parses_from_documented_value() {
+        let cli = Cli::try_parse_from([
+            "buf",
+            "posts",
+            "create",
+            "--channel",
+            "ch_123",
+            "--body",
+            "Hello",
+            "--target",
+            "recommended",
+        ])
+        .expect("parse recommended target");
+        match cli.command.expect("subcommand") {
+            Command::Posts(PostsArgs {
+                command: PostsCommand::Create(create),
+            }) => {
+                assert_eq!(create.target, CreateTarget::Recommended);
+                assert_eq!(create.target.share_mode(), "recommendedTime");
+            }
+            _ => panic!("expected posts create"),
+        }
+    }
+
+    #[test]
+    fn facebook_service_parses_from_documented_value() {
+        let cli = Cli::try_parse_from(["buf", "channels", "list", "--service", "facebook"])
+            .expect("parse facebook service");
+        match cli.command.expect("subcommand") {
+            Command::Channels(args) => match args.command {
+                ChannelsCommand::List(list) => {
+                    assert_eq!(list.service.expect("service"), ChannelService::Facebook);
+                }
+                _ => panic!("expected channels list"),
+            },
+            _ => panic!("expected channels command"),
         }
     }
 }

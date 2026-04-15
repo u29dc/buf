@@ -12,13 +12,15 @@ pub fn list(options: &crate::commands::GlobalOptions, args: &ChannelsListArgs) -
     validate_limit(args.limit, "--limit")?;
     let runtime = load_runtime(&options.path_overrides(), options.api_base_url.as_deref())?;
     let client = build_client(&runtime)?;
-    let (organization_id, organizations) = resolve_organization_id(&client, &runtime.settings)?;
+    let (organization_id, organizations, mut warnings) =
+        resolve_organization_id(&client, &runtime.settings)?;
     let organization = organizations
         .iter()
         .find(|item| item.id == organization_id)
         .cloned();
-    let channels = client.list_channels(&organization_id)?;
-    let mut filtered = filter_channels(&channels, args.service, args.query.as_deref());
+    let response = client.list_channels(&organization_id)?;
+    warnings.extend(response.warnings);
+    let mut filtered = filter_channels(&response.data, args.service, args.query.as_deref());
     if filtered.len() > args.limit {
         filtered.truncate(args.limit);
     }
@@ -39,7 +41,8 @@ pub fn list(options: &crate::commands::GlobalOptions, args: &ChannelsListArgs) -
     .with_count(count)
     .with_total(count)
     .with_has_more(false)
-    .with_text(format!("{count} channel(s) matched")))
+    .with_text(format!("{count} channel(s) matched"))
+    .with_warnings(warnings))
 }
 
 pub fn resolve(
@@ -48,13 +51,15 @@ pub fn resolve(
 ) -> CommandResult {
     let runtime = load_runtime(&options.path_overrides(), options.api_base_url.as_deref())?;
     let client = build_client(&runtime)?;
-    let (organization_id, organizations) = resolve_organization_id(&client, &runtime.settings)?;
+    let (organization_id, organizations, mut warnings) =
+        resolve_organization_id(&client, &runtime.settings)?;
     let organization = organizations
         .iter()
         .find(|item| item.id == organization_id)
         .cloned();
-    let channels = client.list_channels(&organization_id)?;
-    let filtered = filter_channels(&channels, Some(args.service), args.query.as_deref());
+    let response = client.list_channels(&organization_id)?;
+    warnings.extend(response.warnings);
+    let filtered = filter_channels(&response.data, Some(args.service), args.query.as_deref());
 
     let resolved = if let Some(default_id) =
         resolve_default_channel_id(&runtime.settings, args.service)
@@ -98,5 +103,6 @@ pub fn resolve(
     .with_count(1)
     .with_total(1)
     .with_has_more(false)
-    .with_text(format!("resolved {}", args.service.as_str())))
+    .with_text(format!("resolved {}", args.service.as_str()))
+    .with_warnings(warnings))
 }
