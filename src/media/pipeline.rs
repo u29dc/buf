@@ -111,12 +111,10 @@ pub fn prepare_media_for_post(
         }
     }
 
-    let assets = json!({
-        kind.asset_field_name(): asset_urls
-            .iter()
-            .map(|url| json!({ "url": url }))
-            .collect::<Vec<_>>()
-    });
+    let assets = asset_urls
+        .iter()
+        .map(|url| json!({ kind.asset_input_name(): { "url": url } }))
+        .collect::<Value>();
 
     Ok(PreparedMediaBundle {
         items,

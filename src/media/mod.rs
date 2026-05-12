@@ -27,10 +27,10 @@ impl MediaKind {
     }
 
     #[must_use]
-    pub const fn asset_field_name(self) -> &'static str {
+    pub const fn asset_input_name(self) -> &'static str {
         match self {
-            Self::Image => "images",
-            Self::Video => "videos",
+            Self::Image => "image",
+            Self::Video => "video",
         }
     }
 }

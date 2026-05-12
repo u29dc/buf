@@ -440,7 +440,7 @@ async fn posts_create_dry_run_returns_normalized_request() {
         .expect("dry-run public url");
     assert!(public_url.starts_with("https://example-bucket.r2.dev/tmp/buf/"));
     assert_eq!(
-        payload["data"]["request"]["assets"]["images"][0]["url"],
+        payload["data"]["request"]["assets"][0]["image"]["url"],
         Value::String(public_url.to_owned())
     );
 }
@@ -601,8 +601,56 @@ async fn posts_create_threads_dry_run_returns_normalized_request() {
         .expect("dry-run public url");
     assert!(public_url.starts_with("https://example-bucket.r2.dev/tmp/buf/"));
     assert_eq!(
-        payload["data"]["request"]["assets"]["images"][0]["url"],
+        payload["data"]["request"]["assets"][0]["image"]["url"],
         Value::String(public_url.to_owned())
+    );
+}
+
+#[tokio::test]
+async fn posts_create_video_dry_run_uses_ordered_asset_input() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().expect("temp dir");
+    write_env(home.path(), "BUF_API_TOKEN=test-token\n");
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_string_contains("query ChannelById"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "channel": sample_channel("instagram")
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = buf_command(home.path())
+        .args([
+            "--api-base-url",
+            &server.uri(),
+            "posts",
+            "create",
+            "--channel",
+            "ch_123",
+            "--body",
+            "Hello video",
+            "--media",
+            "https://example.com/video.mp4",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run posts create dry-run");
+
+    assert!(output.status.success(), "dry-run create should succeed");
+    let payload = parse_single_json_line(&output);
+    assert_eq!(
+        payload["data"]["request"]["assets"],
+        serde_json::json!([
+            {
+                "video": {
+                    "url": "https://example.com/video.mp4"
+                }
+            }
+        ])
     );
 }
 
@@ -676,7 +724,7 @@ async fn posts_create_calls_create_post_and_returns_created_post() {
         .and(body_string_contains("mutation CreatePost"))
         .and(body_string_contains("\"mode\":\"customScheduled\""))
         .and(body_string_contains(
-            "\"images\":[{\"url\":\"https://example.com/image.jpg\"}]",
+            "\"assets\":[{\"image\":{\"url\":\"https://example.com/image.jpg\"}}]",
         ))
         .and(body_string_contains(
             "\"firstComment\":\"Source in comments\"",
@@ -750,7 +798,7 @@ async fn posts_create_threads_remote_url_calls_create_post() {
         .and(body_string_contains("mutation CreatePost"))
         .and(body_string_contains("\"mode\":\"customScheduled\""))
         .and(body_string_contains(
-            "\"images\":[{\"url\":\"https://example.com/image.jpg\"}]",
+            "\"assets\":[{\"image\":{\"url\":\"https://example.com/image.jpg\"}}]",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "data": {
@@ -854,7 +902,7 @@ async fn posts_create_extensionless_remote_image_url_uses_content_type_detection
     let payload = parse_single_json_line(&output);
     assert_eq!(payload["ok"], Value::Bool(true));
     assert_eq!(
-        payload["data"]["request"]["assets"]["images"][0]["url"],
+        payload["data"]["request"]["assets"][0]["image"]["url"],
         Value::String(format!("{}/image", server.uri()))
     );
 }
