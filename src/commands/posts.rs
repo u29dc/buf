@@ -53,7 +53,6 @@ pub fn list(options: &GlobalOptions, args: &PostsListArgs) -> CommandResult {
     .with_count(count)
     .with_total(count)
     .with_has_more(response.data.page_info.has_more)
-    .with_text(format!("{count} post(s) matched"))
     .with_warnings(warnings))
 }
 
@@ -74,7 +73,6 @@ pub fn get(options: &GlobalOptions, args: &PostsGetArgs) -> CommandResult {
         .with_count(1)
         .with_total(1)
         .with_has_more(false)
-        .with_text(format!("post: {}", args.post_id))
         .with_warnings(response.warnings))
 }
 
@@ -115,7 +113,6 @@ pub fn create(options: &GlobalOptions, args: &PostsCreateArgs) -> CommandResult 
         .with_count(1)
         .with_total(1)
         .with_has_more(false)
-        .with_text("dry-run request generated")
         .with_warnings(warnings));
     }
 
@@ -135,7 +132,6 @@ pub fn create(options: &GlobalOptions, args: &PostsCreateArgs) -> CommandResult 
     .with_count(1)
     .with_total(1)
     .with_has_more(false)
-    .with_text("post created")
     .with_warnings(warnings))
 }
 
@@ -155,7 +151,6 @@ pub fn delete(options: &GlobalOptions, args: &PostsDeleteArgs) -> CommandResult 
     .with_count(1)
     .with_total(1)
     .with_has_more(false)
-    .with_text(format!("deleted post: {}", args.post_id))
     .with_warnings(response.warnings))
 }
 
@@ -187,7 +182,6 @@ pub fn limits(options: &GlobalOptions, args: &PostsLimitsArgs) -> CommandResult 
     .with_count(count)
     .with_total(count)
     .with_has_more(false)
-    .with_text(format!("{count} channel limit record(s) returned"))
     .with_warnings(warnings))
 }
 
@@ -269,7 +263,6 @@ fn empty_list_output(args: &PostsListArgs) -> CommandOutput {
     .with_count(0)
     .with_total(0)
     .with_has_more(false)
-    .with_text("0 post(s) matched")
 }
 
 fn build_list_query(args: &PostsListArgs) -> Value {

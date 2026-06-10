@@ -27,7 +27,6 @@ pub struct CommandMeta {
 pub struct CommandOutput {
     pub tool: &'static str,
     pub data: Value,
-    pub text: String,
     pub meta: CommandMeta,
     pub exit_status: ProcessExit,
 }
@@ -46,16 +45,9 @@ impl CommandOutput {
         Self {
             tool,
             data,
-            text: String::new(),
             meta: CommandMeta::default(),
             exit_status: ProcessExit::Success,
         }
-    }
-
-    #[must_use]
-    pub fn with_text(mut self, text: impl Into<String>) -> Self {
-        self.text = text.into();
-        self
     }
 
     #[must_use]

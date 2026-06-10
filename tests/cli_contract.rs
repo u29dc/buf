@@ -26,6 +26,11 @@ fn parse_single_json_line(output: &std::process::Output) -> Value {
     serde_json::from_str(trimmed).expect("stdout json")
 }
 
+fn parse_toon(output: &std::process::Output) -> Value {
+    let stdout = String::from_utf8(output.stdout.clone()).expect("stdout utf8");
+    toon_format::decode_default(stdout.trim()).expect("stdout toon")
+}
+
 fn write_env(home: &Path, body: &str) {
     fs::write(home.join(".env"), body).expect("write env file");
 }
@@ -178,8 +183,22 @@ fn tools_catalog_is_json_first() {
     let payload = parse_single_json_line(&output);
     assert_eq!(payload["ok"], Value::Bool(true));
     assert_eq!(payload["meta"]["tool"], Value::String("tools".to_owned()));
+    assert_eq!(
+        payload["data"]["defaultOutputFormat"],
+        Value::String("json".to_owned())
+    );
+    assert_eq!(
+        payload["data"]["outputFormats"],
+        serde_json::json!(["json", "toon"])
+    );
     assert!(payload["data"]["globalFlags"].is_array());
     assert!(payload["data"]["tools"].is_array());
+
+    let flags = payload["data"]["globalFlags"]
+        .as_array()
+        .expect("global flags array");
+    assert!(flags.iter().any(|flag| flag["name"] == "--toon"));
+    assert!(!flags.iter().any(|flag| flag["name"] == "--text"));
 
     let tools = payload["data"]["tools"].as_array().expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "channels.list"));
@@ -244,6 +263,86 @@ fn tools_catalog_is_json_first() {
 
     assert!(tools.iter().any(|tool| tool["name"] == "posts.delete"));
     assert!(tools.iter().any(|tool| tool["name"] == "posts.limits"));
+}
+
+#[test]
+fn tools_catalog_supports_toon_output() {
+    let home = TempDir::new().expect("temp dir");
+    let json_output = buf_command(home.path())
+        .arg("tools")
+        .output()
+        .expect("run tools");
+    let toon_output = buf_command(home.path())
+        .args(["tools", "--toon"])
+        .output()
+        .expect("run tools toon");
+
+    assert!(toon_output.status.success(), "tools --toon should succeed");
+    let json_payload = parse_single_json_line(&json_output);
+    let toon_payload = parse_toon(&toon_output);
+    assert_eq!(json_payload["ok"], toon_payload["ok"]);
+    assert_eq!(json_payload["data"], toon_payload["data"]);
+    assert_eq!(json_payload["meta"]["tool"], toon_payload["meta"]["tool"]);
+    assert_eq!(json_payload["meta"]["count"], toon_payload["meta"]["count"]);
+}
+
+#[test]
+fn root_without_command_prints_help_successfully() {
+    let home = TempDir::new().expect("temp dir");
+    let output = buf_command(home.path()).output().expect("run buf");
+
+    assert!(
+        output.status.success(),
+        "bare buf should print help and exit 0"
+    );
+    assert!(output.stderr.is_empty(), "help should print to stdout");
+
+    let help = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(help.contains("Usage:"));
+    assert!(help.contains("--toon"));
+    assert!(!help.contains("--text"));
+}
+
+#[test]
+fn groups_without_subcommands_print_help_successfully() {
+    let home = TempDir::new().expect("temp dir");
+
+    for group in ["config", "channels", "posts"] {
+        let output = buf_command(home.path())
+            .arg(group)
+            .output()
+            .expect("run group help");
+
+        assert!(
+            output.status.success(),
+            "{group} should print help and exit 0"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{group} help should print to stdout"
+        );
+
+        let help = String::from_utf8(output.stdout).expect("stdout utf8");
+        assert!(help.contains("Usage:"));
+        assert!(help.contains(group));
+    }
+}
+
+#[test]
+fn text_flag_is_not_accepted() {
+    let home = TempDir::new().expect("temp dir");
+    let output = buf_command(home.path())
+        .args(["--text", "tools"])
+        .output()
+        .expect("run buf");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "parse errors should not emit an envelope"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("unexpected argument '--text'") || stderr.contains("unrecognized"));
 }
 
 #[test]
@@ -363,7 +462,7 @@ async fn channels_list_maps_graphql_rate_limit_exceeded_code() {
     assert_eq!(payload["ok"], Value::Bool(false));
     assert_eq!(
         payload["error"]["code"],
-        Value::String("RATE_LIMITED".to_owned())
+        Value::String("rate_limited".to_owned())
     );
 }
 
@@ -946,7 +1045,7 @@ async fn posts_create_rejects_threads_link_attachment_with_video() {
     let payload = parse_single_json_line(&output);
     assert_eq!(
         payload["error"]["code"],
-        Value::String("VALIDATION_ERROR".to_owned())
+        Value::String("validation_error".to_owned())
     );
 }
 
@@ -1059,7 +1158,7 @@ async fn posts_get_maps_graphql_not_found_code() {
     assert_eq!(payload["ok"], Value::Bool(false));
     assert_eq!(
         payload["error"]["code"],
-        Value::String("NOT_FOUND".to_owned())
+        Value::String("not_found".to_owned())
     );
 }
 

@@ -6,9 +6,9 @@ use crate::commands::CommandMeta;
 use crate::error::CommandError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputMode {
+pub enum OutputFormat {
     Json,
-    Text,
+    Toon,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,7 +49,13 @@ struct ErrorEnvelope<'a> {
     meta: EnvelopeMeta,
 }
 
-pub fn emit_success(tool: &str, data: &Value, elapsed: u128, meta: &CommandMeta) {
+pub fn emit_success(
+    tool: &str,
+    data: &Value,
+    elapsed: u128,
+    meta: &CommandMeta,
+    format: OutputFormat,
+) {
     let envelope = SuccessEnvelope {
         ok: true,
         data,
@@ -63,19 +69,15 @@ pub fn emit_success(tool: &str, data: &Value, elapsed: u128, meta: &CommandMeta)
         },
     };
 
-    match serde_json::to_string(&envelope) {
-        Ok(payload) => println!("{payload}"),
-        Err(_) => println!(
-            "{{\"ok\":false,\"error\":{{\"code\":\"SERIALIZATION_ERROR\",\"message\":\"failed to serialize success envelope\",\"hint\":\"Retry the command after reducing output size\"}},\"meta\":{{\"tool\":\"{tool}\",\"elapsed\":0}}}}"
-        ),
-    }
+    emit_envelope(&envelope, format, tool, elapsed);
 }
 
-pub fn emit_error(tool: &str, error: &CommandError, elapsed: u128) {
+pub fn emit_error(tool: &str, error: &CommandError, elapsed: u128, format: OutputFormat) {
+    let code = normalize_error_code(error.code());
     let envelope = ErrorEnvelope {
         ok: false,
         error: ErrorBody {
-            code: error.code(),
+            code: &code,
             message: error.message(),
             hint: error.hint(),
             details: error.details(),
@@ -90,22 +92,72 @@ pub fn emit_error(tool: &str, error: &CommandError, elapsed: u128) {
         },
     };
 
-    match serde_json::to_string(&envelope) {
+    emit_envelope(&envelope, format, tool, elapsed);
+}
+
+fn emit_envelope<T: Serialize>(envelope: &T, format: OutputFormat, tool: &str, elapsed: u128) {
+    let rendered = match format {
+        OutputFormat::Json => serde_json::to_string(envelope).map_err(|err| err.to_string()),
+        OutputFormat::Toon => toon_format::encode_default(envelope).map_err(|err| err.to_string()),
+    };
+
+    match rendered {
         Ok(payload) => println!("{payload}"),
-        Err(_) => println!(
-            "{{\"ok\":false,\"error\":{{\"code\":\"SERIALIZATION_ERROR\",\"message\":\"failed to serialize error envelope\",\"hint\":\"Retry the command after reducing output size\"}},\"meta\":{{\"tool\":\"{tool}\",\"elapsed\":0}}}}"
-        ),
+        Err(_) => emit_serialization_error(tool, elapsed, format),
     }
 }
 
-pub fn print_text_error(tool: &str, error: &CommandError) {
-    eprintln!("ERROR [{tool}] {}: {}", error.code(), error.message());
-    eprintln!("HINT  {}", error.hint());
-    if let Some(details) = error.details() {
-        eprintln!("DETAILS {details}");
+fn emit_serialization_error(tool: &str, elapsed: u128, format: OutputFormat) {
+    let envelope = ErrorEnvelope {
+        ok: false,
+        error: ErrorBody {
+            code: "serialization_error",
+            message: "failed to serialize envelope",
+            hint: "Retry the command after reducing output size",
+            details: None,
+        },
+        meta: EnvelopeMeta {
+            tool: tool.to_owned(),
+            elapsed: clamp_elapsed(elapsed),
+            count: None,
+            total: None,
+            has_more: None,
+            warnings: None,
+        },
+    };
+
+    let rendered = match format {
+        OutputFormat::Json => serde_json::to_string(&envelope).ok(),
+        OutputFormat::Toon => toon_format::encode_default(&envelope).ok(),
+    };
+
+    if let Some(payload) = rendered {
+        println!("{payload}");
+    } else {
+        println!(
+            "{{\"ok\":false,\"error\":{{\"code\":\"serialization_error\",\"message\":\"failed to serialize error envelope\",\"hint\":\"Retry the command after reducing output size\"}},\"meta\":{{\"tool\":\"{tool}\",\"elapsed\":{}}}}}",
+            clamp_elapsed(elapsed)
+        );
     }
 }
 
 fn clamp_elapsed(value: u128) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn normalize_error_code(code: &str) -> String {
+    let mut normalized = String::with_capacity(code.len());
+    let mut previous_was_underscore = false;
+
+    for character in code.chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+            previous_was_underscore = false;
+        } else if !previous_was_underscore {
+            normalized.push('_');
+            previous_was_underscore = true;
+        }
+    }
+
+    normalized.trim_matches('_').to_owned()
 }

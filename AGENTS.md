@@ -18,10 +18,10 @@
 │   ├── buffer_api.rs         Buffer GraphQL queries and mutation mapping
 │   ├── cli.rs                clap grammar and enums
 │   ├── config.rs             runtime path and settings resolution
-│   ├── envelope.rs           JSON/text output contract
+│   ├── envelope.rs           JSON/Toon output contract
 │   └── tool_registry.rs      `buf tools` metadata source
 ├── tests/
-│   └── cli_contract.rs       JSON-first CLI and request-shape contract tests
+│   └── cli_contract.rs       JSON-default CLI and request-shape contract tests
 ├── .tmp/docs/                non-authoritative research notes
 ├── AGENTS.md                 canonical repo-level agent instructions
 ├── CLAUDE.md -> AGENTS.md
@@ -37,7 +37,7 @@
 | Layer | Choice | Notes |
 | --- | --- | --- |
 | Runtime | Rust 2024 | single binary crate with `unsafe_code = "forbid"` |
-| CLI | `clap` | noun-first subcommands, JSON-first output, `--text` override |
+| CLI | `clap` | noun-first subcommands, JSON default output, optional `--toon` |
 | Buffer transport | GraphQL over blocking `reqwest` | documented queries plus `createPost`, `deletePost`, and `dailyPostingLimits` |
 | Media pipeline | `ffprobe` + `ffmpeg` | local probe, profile fit, normalization to JPEG or H.264/AAC MP4 |
 | Storage | Cloudflare R2 via AWS S3 SDK | public-read URL plus authenticated S3-compatible upload |
@@ -60,7 +60,7 @@
 ## 5. Architecture
 
 - [`src/main.rs`](src/main.rs) parses the CLI, defaults stdout to JSON, dispatches commands, and maps success or failure to exit codes `0`, `1`, and `2`.
-- [`src/envelope.rs`](src/envelope.rs) defines the public envelope. JSON mode must emit exactly one stdout line with `{ ok, data | error, meta }`; `--text` is a human-readable escape hatch.
+- [`src/envelope.rs`](src/envelope.rs) defines the public envelope. Default JSON emits exactly one stdout line with `{ ok, data | error, meta }`; `--toon` emits the same envelope encoded as Toon.
 - [`src/tool_registry.rs`](src/tool_registry.rs) is the single source for `buf tools`. Keep command strings, examples, input schemas, output fields, and flags synchronized with [`src/cli.rs`](src/cli.rs) and [`tests/cli_contract.rs`](tests/cli_contract.rs).
 - [`src/buffer_api.rs`](src/buffer_api.rs) owns documented GraphQL queries, documented mutations, and upstream warning handling. Do not invent undocumented Buffer mutations or local-upload API behavior.
 - [`src/commands/posts.rs`](src/commands/posts.rs) resolves exactly one body source, injects `publishedUrl` from Buffer `externalLink`, and resolves `--service` post filters to channel ids because Buffer post filtering is channel-based, not service-based.
@@ -83,7 +83,7 @@
 
 ## 7. Conventions
 
-- Preserve JSON-first stdout. `--text` changes presentation only; post content must stay on `--body`, `--body-file`, or `--stdin`.
+- Preserve JSON-default stdout and optional `--toon`. Generic text/table/CSV/TSV stdout presentation modes are not part of the public CLI contract; post content must stay on `--body`, `--body-file`, or `--stdin`.
 - Keep the public media surface unified as `--media`. Do not reintroduce split flags like `--image-url`, `--video-file`, or provider-specific upload arguments.
 - Preserve `publishedUrl` on post outputs as a non-breaking alias for Buffer `externalLink`.
 - Keep tool names noun-first and keep [`src/cli.rs`](src/cli.rs), [`src/tool_registry.rs`](src/tool_registry.rs), and [`tests/cli_contract.rs`](tests/cli_contract.rs) aligned whenever the surface changes.

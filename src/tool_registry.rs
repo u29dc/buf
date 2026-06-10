@@ -87,9 +87,9 @@ pub fn find_tool(name: &str) -> Option<&'static ToolMetadata> {
 pub fn global_flags() -> &'static [GlobalFlag] {
     static FLAGS: [GlobalFlag; 5] = [
         GlobalFlag {
-            name: "--text",
+            name: "--toon",
             flag_type: "boolean",
-            description: "Emit human-readable output instead of the default JSON envelope.",
+            description: "Emit Toon instead of the default JSON envelope.",
         },
         GlobalFlag {
             name: "--home",
@@ -118,7 +118,7 @@ pub fn global_flags() -> &'static [GlobalFlag] {
 fn tools_tool() -> ToolMetadata {
     ToolMetadata {
         name: "tools",
-        command: "buf tools [name]",
+        command: "buf tools [name] [--toon]",
         category: "infra",
         description: "List all available tools or return one tool metadata record.",
         parameters: vec![parameter(
@@ -127,11 +127,20 @@ fn tools_tool() -> ToolMetadata {
             false,
             "Optional dotted tool name for detail mode.",
         )],
-        output_fields: vec!["version", "globalFlags", "tools", "tool"],
+        output_fields: vec![
+            "version",
+            "outputFormats",
+            "defaultOutputFormat",
+            "globalFlags",
+            "tools",
+            "tool",
+        ],
         output_schema: json!({
             "type": "object",
             "properties": {
                 "version": { "type": "string" },
+                "outputFormats": { "type": "array", "items": { "type": "string" } },
+                "defaultOutputFormat": { "type": "string" },
                 "globalFlags": { "type": "array" },
                 "tools": { "type": "array" },
                 "tool": { "type": "object" }

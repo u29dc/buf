@@ -3,10 +3,14 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
-#[command(name = "buf", version, about = "JSON-first Buffer CLI for agents")]
+#[command(name = "buf", version, about = "JSON-default Buffer CLI for agents")]
 pub struct Cli {
-    #[arg(long, global = true, help = "Emit human-readable text")]
-    pub text: bool,
+    #[arg(
+        long,
+        global = true,
+        help = "Emit Toon instead of the default JSON envelope"
+    )]
+    pub toon: bool,
 
     #[arg(long, global = true, value_name = "PATH", help = "Override BUF_HOME")]
     pub home: Option<PathBuf>,
@@ -52,7 +56,7 @@ pub struct ToolsArgs {
 #[derive(Debug, Clone, Args)]
 pub struct ConfigArgs {
     #[command(subcommand)]
-    pub command: ConfigCommand,
+    pub command: Option<ConfigCommand>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -64,7 +68,7 @@ pub enum ConfigCommand {
 #[derive(Debug, Clone, Args)]
 pub struct ChannelsArgs {
     #[command(subcommand)]
-    pub command: ChannelsCommand,
+    pub command: Option<ChannelsCommand>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -97,7 +101,7 @@ pub struct ChannelsResolveArgs {
 #[derive(Debug, Clone, Args)]
 pub struct PostsArgs {
     #[command(subcommand)]
-    pub command: PostsCommand,
+    pub command: Option<PostsCommand>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -346,7 +350,7 @@ mod tests {
             .expect("parse linkedin service");
         match cli.command.expect("subcommand") {
             Command::Channels(args) => match args.command {
-                ChannelsCommand::List(list) => {
+                Some(ChannelsCommand::List(list)) => {
                     assert_eq!(list.service.expect("service").as_str(), "linkedin");
                 }
                 _ => panic!("expected channels list"),
@@ -361,7 +365,7 @@ mod tests {
             .expect("parse threads service");
         match cli.command.expect("subcommand") {
             Command::Channels(args) => match args.command {
-                ChannelsCommand::Resolve(resolve) => {
+                Some(ChannelsCommand::Resolve(resolve)) => {
                     assert_eq!(resolve.service, ChannelService::Threads);
                     assert_eq!(resolve.service.as_str(), "threads");
                 }
@@ -377,7 +381,7 @@ mod tests {
             .expect("parse needs_approval status");
         match cli.command.expect("subcommand") {
             Command::Posts(PostsArgs {
-                command: PostsCommand::List(list),
+                command: Some(PostsCommand::List(list)),
             }) => {
                 assert_eq!(list.status.expect("status"), PostStatus::NeedsApproval);
             }
@@ -401,7 +405,7 @@ mod tests {
         .expect("parse recommended target");
         match cli.command.expect("subcommand") {
             Command::Posts(PostsArgs {
-                command: PostsCommand::Create(create),
+                command: Some(PostsCommand::Create(create)),
             }) => {
                 assert_eq!(create.target, CreateTarget::Recommended);
                 assert_eq!(create.target.share_mode(), "recommendedTime");
@@ -416,7 +420,7 @@ mod tests {
             .expect("parse facebook service");
         match cli.command.expect("subcommand") {
             Command::Channels(args) => match args.command {
-                ChannelsCommand::List(list) => {
+                Some(ChannelsCommand::List(list)) => {
                     assert_eq!(list.service.expect("service"), ChannelService::Facebook);
                 }
                 _ => panic!("expected channels list"),

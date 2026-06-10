@@ -158,7 +158,6 @@ pub fn run(options: &GlobalOptions) -> CommandResult {
     .with_count(count)
     .with_total(count)
     .with_has_more(false)
-    .with_text(format!("health status: {status}"))
     .with_exit_status(exit_status))
 }
 

@@ -9,6 +9,8 @@ use crate::tool_registry::{GlobalFlag, ToolMetadata, find_tool, global_flags, to
 #[serde(rename_all = "camelCase")]
 struct ToolsCatalog<'a> {
     version: &'static str,
+    output_formats: [&'static str; 2],
+    default_output_format: &'static str,
     global_flags: &'a [GlobalFlag],
     tools: &'a [ToolMetadata],
 }
@@ -23,6 +25,8 @@ pub fn run(name: Option<&str>) -> CommandResult {
 fn catalog() -> CommandResult {
     let payload = ToolsCatalog {
         version: env!("CARGO_PKG_VERSION"),
+        output_formats: ["json", "toon"],
+        default_output_format: "json",
         global_flags: global_flags(),
         tools: tool_registry(),
     };
@@ -32,8 +36,7 @@ fn catalog() -> CommandResult {
     Ok(CommandOutput::new("tools", data)
         .with_count(count)
         .with_total(count)
-        .with_has_more(false)
-        .with_text(format!("{count} tools available")))
+        .with_has_more(false))
 }
 
 fn detail(name: &str) -> CommandResult {
@@ -48,6 +51,5 @@ fn detail(name: &str) -> CommandResult {
     Ok(CommandOutput::new("tools", json!({ "tool": tool }))
         .with_count(1)
         .with_total(1)
-        .with_has_more(false)
-        .with_text(format!("{} -> {}", tool.name, tool.command)))
+        .with_has_more(false))
 }

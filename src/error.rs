@@ -26,7 +26,7 @@ pub struct CommandError {
     code: &'static str,
     message: String,
     hint: String,
-    details: Option<Value>,
+    details: Option<Box<Value>>,
 }
 
 impl CommandError {
@@ -60,7 +60,7 @@ impl CommandError {
 
     #[must_use]
     pub fn with_details(mut self, details: Value) -> Self {
-        self.details = Some(details);
+        self.details = Some(Box::new(details));
         self
     }
 
@@ -85,8 +85,8 @@ impl CommandError {
     }
 
     #[must_use]
-    pub const fn details(&self) -> Option<&Value> {
-        self.details.as_ref()
+    pub fn details(&self) -> Option<&Value> {
+        self.details.as_deref()
     }
 }
 

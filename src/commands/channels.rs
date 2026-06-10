@@ -41,7 +41,6 @@ pub fn list(options: &crate::commands::GlobalOptions, args: &ChannelsListArgs) -
     .with_count(count)
     .with_total(count)
     .with_has_more(false)
-    .with_text(format!("{count} channel(s) matched"))
     .with_warnings(warnings))
 }
 
@@ -103,6 +102,5 @@ pub fn resolve(
     .with_count(1)
     .with_total(1)
     .with_has_more(false)
-    .with_text(format!("resolved {}", args.service.as_str()))
     .with_warnings(warnings))
 }

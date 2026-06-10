@@ -17,10 +17,7 @@ pub fn show(options: &GlobalOptions) -> CommandResult {
         media_credentials: runtime.media_credentials.clone(),
     });
 
-    Ok(CommandOutput::new("config.show", data).with_text(format!(
-        "config resolved from {}",
-        runtime.paths.env_file.display()
-    )))
+    Ok(CommandOutput::new("config.show", data))
 }
 
 pub fn validate(options: &GlobalOptions) -> CommandResult {
@@ -57,9 +54,7 @@ pub fn validate(options: &GlobalOptions) -> CommandResult {
         ProcessExit::Success
     };
 
-    Ok(CommandOutput::new("config.validate", data)
-        .with_text("config validate complete")
-        .with_exit_status(exit_status))
+    Ok(CommandOutput::new("config.validate", data).with_exit_status(exit_status))
 }
 
 fn present_config(inspection: &ConfigInspection) -> serde_json::Value {
